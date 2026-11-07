@@ -13,6 +13,9 @@ Clean-runner GTK compatibility fix (0.2.7): older GTK PNG encoders replace the
 initial private file, losing its 0600 mode. Reapply 0600 after successful encoding;
 the 0700 parent directory stays private throughout. A replacement-encoder fixture
 checks the permission contract independently of the installed GTK version.
+The reaction keyboard test explicitly brings its button into view after the URL
+preview grows; font/layout differences otherwise leave the popup anchor offscreen.
+CI captures the offline native window for visual inspection on Ubuntu 24.04.
 
 Local verification: 24 core tests, the terminal PTY regression, the native GTK/D-Bus
 integration and installed Alacritty keyboard/reply checks passed. Runtime `npm audit

@@ -174,6 +174,14 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     app.open_link=launch_link
     app.load_url_preview('native-link','https://example.com/native-chat')
     wait(lambda:app.preview_targets.get('native-link',[None])[0].get_text()=='A native link preview','URL preview failed')
+    # The preview adds an image below the link. Bring the reaction button into
+    # view after layout; GTK versions/fonts give this card different heights.
+    pump(.2)
+    react_button=app.reaction_buttons['native-link']
+    ok, react_bounds=react_button.compute_bounds(app.message_list); assert ok
+    adj.set_value(max(0,react_bounds.get_y()-adj.get_page_size()/2)); pump(.2)
+    ok, react_bounds=react_button.compute_bounds(app.message_scroll); assert ok
+    assert 0 <= react_bounds.get_y() < app.message_scroll.get_height(), 'Reaction anchor is outside the viewport'
     app.select_message('native-link'); app.composer.grab_focus(); pump(.1); press(0xffc3)  # F6 opens lazy reaction picker.
     popover=app.reaction_buttons['native-link'].get_popover()
     assert popover and popover.get_visible(), f'Reaction picker did not open: {popover}'
