@@ -46,6 +46,10 @@ class ClipboardImages:
             error = None
             try:
                 if not texture.save_to_png(filename): raise OSError('PNG encoding failed')
+                # Some GTK versions replace the mkstemp file while encoding,
+                # so its original 0600 mode is not guaranteed to survive.
+                # The containing directory remains private throughout (0700).
+                os.chmod(filename, 0o600)
                 size = Path(filename).stat().st_size
                 if size > MAX_BYTES:
                     error = 'Clipboard image exceeds the 100 MiB attachment limit.'

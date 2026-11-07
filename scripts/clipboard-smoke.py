@@ -4,11 +4,31 @@ import sys
 import subprocess
 from app import Gdk, GLib
 from gi.repository import GObject
+from clipboard_images import ClipboardImages
 
 
 def exercise(app, root, press, pump, wait, row_count):
     clipboard = app.window.get_clipboard()
     fixture = root / 'test/fixtures/demo.png'
+    # Model older GTK encoders that replace the file and discard mkstemp's mode.
+    class ReplacingEncoder:
+        def get_width(self): return 1
+        def get_height(self): return 1
+        def save_to_png(self, filename):
+            path = Path(filename)
+            path.unlink()
+            path.write_bytes(fixture.read_bytes())
+            path.chmod(0o644)
+            return True
+    private_images = ClipboardImages()
+    encoded = []
+    try:
+        private_images.capture(ReplacingEncoder(), lambda path, error: encoded.append((path, error)))
+        wait(lambda: bool(encoded), 'Replacement encoder did not finish')
+        path, error = encoded[0]
+        assert error is None and Path(path).stat().st_mode & 0o777 == 0o600
+    finally:
+        private_images.close()
     provider = Gdk.ContentProvider.new_for_bytes('image/png', GLib.Bytes.new(fixture.read_bytes()))
     clipboard.set_content(provider)
     app.composer.get_buffer().set_text('Clipboard screenshot caption')
