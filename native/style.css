@@ -1,0 +1,36 @@
+window { background: #111b21; color: #e6edf0; }
+headerbar { background: #18262d; border-bottom: 1px solid #2b3d45; }
+.brand { font-size: 19px; font-weight: 800; color: #9ae5c6; }
+.muted { color: #9fb4bd; }
+.small { font-size: 11px; }
+.title { font-size: 17px; font-weight: 700; }
+.sidebar { background: #16242b; border-right: 1px solid #2b3d45; }
+.chat-row { padding: 12px 10px; border-radius: 8px; }
+.chat-row:hover { background: #21343c; }
+row:selected { background: #294940; }
+list, listbox, scrolledwindow { background: transparent; }
+button { background: #263b44; color: #e6edf0; border: 1px solid #37515b; border-radius: 8px; padding: 6px 10px; box-shadow: none; }
+button:hover { background: #34525b; }
+button.suggested-action { background: #87dfb8; color: #102a20; font-weight: 700; border: 0; }
+button.flat { background: transparent; border: 0; padding: 4px 6px; }
+button:disabled { opacity: .45; }
+entry, searchentry, textview, textview text { background: #1c3038; color: #ecf3f5; caret-color: #9ae5c6; }
+entry, searchentry { border-radius: 8px; border: 1px solid #37515b; padding: 6px; }
+selection { background: #4b8a75; color: white; }
+.conversation { padding: 16px 22px; }
+.bubble { background: #25333c; border: 1px solid #31444e; border-radius: 13px; padding: 10px 13px; }
+.bubble.mine { background: #174c3b; border-color: #28664e; }
+.bubble.selected { border-color: #a5e8cc; }
+.message-body { font-size: 14px; }
+.bubble a, .preview-card a { color: #a4e9d8; }
+.message-meta { color: #adccc2; font-size: 11px; }
+.composer { background: #18292f; border-top: 1px solid #30454e; padding: 10px 16px; }
+.preview-card { border-left: 3px solid #92ddbe; background: alpha(#111b21,.35); border-radius: 6px; padding: 9px; }
+.reply-preview { border-left: 3px solid #8adbb4; padding: 7px 10px; background: #203b37; }
+.badge { background: #8adbb4; color: #113126; border-radius: 20px; padding: 3px 8px; font-weight: 700; }
+.status { color: #abc0c8; padding: 6px 12px; font-size: 12px; }
+.error { color: #ffb7a9; }
+.empty { color: #a7bfc7; font-size: 17px; padding: 35px; }
+.avatar { border-radius: 22px; background: #30504c; padding: 8px; color: #b4ecd7; font-weight: 700; }
+.chat-avatar { min-width: 36px; min-height: 36px; border-radius: 18px; background: #30504c; }
+.chat-avatar .avatar { padding: 0; }
