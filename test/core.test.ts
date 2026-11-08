@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { DisconnectReason, generateWAMessageFromContent, normalizeMessageContent, type AnyMessageContent, type MiscMessageGenerationOptions, type WAMessage, type WASocket, type SocketConfig } from '@whiskeysockets/baileys';
+import { proto, processSyncAction, DisconnectReason, generateWAMessageFromContent, normalizeMessageContent, type AnyMessageContent, type MiscMessageGenerationOptions, type WAMessage, type WASocket, type SocketConfig } from '@whiskeysockets/baileys';
+import { fetchMuteSettings } from '../src/mute-sync.js';
+import { decodePatches, decodeSyncdSnapshot } from '@whiskeysockets/baileys';
 import { Store, PAGE_SIZE } from '../src/store.js';
 import { sqliteAuth } from '../src/auth.js';
 import { AppEvents, displayText, singleLine } from '../src/model.js';
@@ -18,6 +20,145 @@ import unicode from 'neo-blessed/lib/unicode.js';
 import { webLinks, openWebLink } from '../src/links.js';
 import { bubbleLinkAt, layoutMessages, wrapMessage } from '../src/conversation.js';
 import { NativeAssets, pageMetadata, publicAddress } from '../src/native-assets.js';
+
+test('muted chats retain sidebar unread counts but leave desktop totals, with expiry and explicit unmutes', () => {
+  const store = new Store(':memory:'), now = 1_800_000_000_000;
+  try {
+    store.chat('quiet@g.us', 'Quiet group', 0, 7); store.chat('loud@g.us', 'Loud group', 0, 2);
+    assert.deepEqual(store.notificationUnreadChats(now), {}, 'Alerts must wait for the initial settings sync');
+    store.completeMuteSync();
+    store.setMute('quiet@g.us', (now + 8*3600_000)/1000);
+    assert.equal(store.unread(), 9); assert.equal(store.listChats().find(c => c.id==='quiet@g.us')?.unread, 7);
+    assert.deepEqual(store.notificationUnreadChats(now), { 'loud@g.us': 2 });
+    assert.equal(store.nextMuteExpiry(now), now + 8*3600_000);
+    assert.equal(store.muted('quiet@g.us', now+8*3600_000), false);
+    store.setMute('quiet@g.us', now+1000); assert.equal(store.muted('quiet@g.us',now), true);
+    store.setMute('quiet@g.us', -1); assert.equal(store.muted('quiet@g.us',now+1e12), true);
+    assert.equal(store.nextMuteExpiry(now), undefined);
+    store.setMute('quiet@g.us', Number('18446744073709551615')); assert.equal(store.muted('quiet@g.us',now), true);
+    store.setMute('quiet@g.us', Number.NaN); assert.equal(store.muted('quiet@g.us',now), true);
+    store.setMute('quiet@g.us', null); assert.equal(store.muted('quiet@g.us',now), false);
+    assert.deepEqual(store.notificationUnreadChats(now), { 'quiet@g.us': 7, 'loud@g.us': 2 });
+    store.setMute('quiet@g.us', -1); store.setMute('quiet@g.us', 0); assert.equal(store.muted('quiet@g.us',now), false);
+    store.chat('123@lid', 'Alias chat', 0, 3); store.setMute('447700900001:2@s.whatsapp.net', -1);
+    store.alias('123@lid','447700900001@s.whatsapp.net');
+    assert.equal(store.notificationUnreadChats(now)['123@lid'], undefined);
+    store.setMute('123@lid', null); assert.equal(store.muted('447700900001@s.whatsapp.net',now), false);
+    assert.equal(store.notificationUnreadChats(now)['123@lid'], 3);
+  } finally { store.close(); }
+});
+
+test('history and incremental mute updates persist, while omitted protobuf fields cannot unmute a chat', async () => {
+  const directory = await mkdtemp(join(tmpdir(),'quietchat-mutes-')), path = join(directory,'test.db');
+  let store = new Store(path);
+  const events = new AppEvents(), ev = new EventEmitter();
+  const adapter = new WhatsAppTransport(store, events, new MediaCache('/unused'), () => ({ ev,end(){} }) as unknown as WASocket);
+  try {
+    await adapter.start(); store.completeMuteSync();
+    ev.emit('messaging-history.set', { contacts:[], messages:[], chats:[{id:'mute@g.us',muteEndTime:-1,unreadCount:4}] });
+    assert.equal(store.muted('mute@g.us'), true);
+    ev.emit('chats.update', [{id:'mute@g.us',name:'Renamed'}]);
+    ev.emit('messaging-history.set', { contacts:[], messages:[], chats:[proto.Conversation.create({id:'mute@g.us'})] });
+    assert.equal(store.muted('mute@g.us'), true);
+    ev.emit('chats.update', [{id:'mute@g.us',muteEndTime:null}]); assert.equal(store.muted('mute@g.us'), false);
+    const mutation = {index:['mute','mute@g.us'],syncAction:{value:{muteAction:{muted:true}}}};
+    processSyncAction(mutation, ev as unknown as Parameters<typeof processSyncAction>[1], {id:'self@s.whatsapp.net'});
+    assert.equal(store.muted('mute@g.us'), true, 'Always mute with omitted expiry must remain silent');
+    mutation.syncAction.value.muteAction.muted=false;
+    processSyncAction(mutation, ev as unknown as Parameters<typeof processSyncAction>[1], {id:'self@s.whatsapp.net'});
+    assert.equal(store.muted('mute@g.us'), false);
+    ev.emit('chats.upsert', [{id:'mute@g.us',muteEndTime:Date.now()+3600_000}]); assert.equal(store.muted('mute@g.us'), true);
+    adapter.stop(); store.close(); store = new Store(path);
+    assert.equal(store.muted('mute@g.us'), true); assert.equal(store.muteSyncReady(), true);
+    assert.equal(store.unreadChats()['mute@g.us'], 4);
+  } finally { adapter.stop(); store.close(); await rm(directory,{recursive:true,force:true}); }
+});
+
+test('upgrading imports only mute settings once without changing saved sync cursors', { timeout: 3000 }, async () => {
+  const store = new Store(':memory:'), events = new AppEvents(), ev = new EventEmitter();
+  const auth = sqliteAuth(store);
+  auth.state.creds.myAppStateKeyId = 'synthetic-key'; auth.save();
+  const state = {version:4,hash:Buffer.alloc(128),indexValueMap:{}};
+  await auth.state.keys.set({'app-state-sync-version':{regular_high:state,regular_low:state}});
+  const before = store.db.prepare('SELECT * FROM auth ORDER BY category,id').all();
+  let syncs=0;
+  const adapter = new WhatsAppTransport(store, events, new MediaCache('/unused'), () => ({ev,end(){}}) as unknown as WASocket,
+    async () => {syncs++; return new Map([['quiet@g.us',-1]]);});
+  try {
+    await adapter.start();
+    const completed = new Promise<void>(resolve => events.on('notificationPolicy', () => {if(store.muteSyncReady()) resolve();}));
+    ev.emit('connection.update',{connection:'open'}); await completed;
+    assert.equal(store.muted('quiet@g.us'),true); assert.equal(syncs,1);
+    ev.emit('creds.update',{}); assert.equal(syncs,1);
+    assert.deepEqual(store.db.prepare('SELECT * FROM auth ORDER BY category,id').all(),before);
+  } finally { adapter.stop(); store.close(); }
+});
+
+test('failed mute refresh keeps alerts paused without continuous retries', { timeout: 3000 }, async () => {
+  const store = new Store(':memory:'), events = new AppEvents(), ev = new EventEmitter();
+  const auth=sqliteAuth(store); auth.state.creds.myAppStateKeyId='synthetic'; auth.save();
+  let calls=0;
+  const adapter=new WhatsAppTransport(store,events,new MediaCache('/unused'),() => ({ev,end(){}}) as unknown as WASocket,
+    async () => {calls++;throw new Error('No verified snapshot');});
+  try {
+    await adapter.start();
+    const failed=new Promise<void>(resolve => events.on('notice',text => {if(text.includes('could not be synced')) resolve();}));
+    ev.emit('connection.update',{connection:'open'}); await failed;
+    assert.equal(store.muteSyncReady(),false);
+    ev.emit('creds.update',{}); assert.equal(calls,1);
+  } finally {adapter.stop();store.close();}
+});
+
+test('mute refresh waits for its key and discards completion from a stopped connection', async () => {
+  const store=new Store(':memory:'), events=new AppEvents(), ev=new EventEmitter();
+  let options: Partial<SocketConfig> | undefined, finish!: (value: Map<string,number|null>) => void, calls=0;
+  const adapter=new WhatsAppTransport(store,events,new MediaCache('/unused'),config => {
+    options=config;return {ev,end(){}} as unknown as WASocket;
+  },async () => {calls++;return await new Promise<Map<string,number|null>>(resolve => {finish=resolve;});});
+  try {
+    await adapter.start();ev.emit('connection.update',{connection:'open'});assert.equal(calls,0);
+    options!.auth!.creds.myAppStateKeyId='synthetic';ev.emit('creds.update',{});assert.equal(calls,1);
+    adapter.stop();finish(new Map([['quiet@g.us',-1]]));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(store.muteSyncReady(),false);assert.equal(store.muted('quiet@g.us'),false);
+  } finally {adapter.stop();store.close();}
+});
+
+test('live mute changes outrank an in-flight snapshot, including linked phone/LID chats', () => {
+  const store=new Store(':memory:');
+  try {
+    store.setMute('old@g.us',-1); const revision=store.muteRevision();
+    store.setMute('quiet@g.us',-1); store.setMute('447700900001@s.whatsapp.net',null);
+    store.alias('123@lid','447700900001@s.whatsapp.net');
+    store.restoreMutes(new Map([['quiet@g.us',null],['123@lid',-1],['snapshot@g.us',-1]]),revision);
+    assert.equal(store.muted('quiet@g.us'),true); assert.equal(store.muted('123@lid'),false);
+    assert.equal(store.muted('old@g.us'),false); assert.equal(store.muted('snapshot@g.us'),true);
+    assert.equal(store.muteSyncReady(),true);
+  } finally {store.close();}
+});
+
+test('mute snapshot reader verifies SDK MACs, follows bounded patches, and filters unrelated actions', async () => {
+  const store=new Store(':memory:'), auth=sqliteAuth(store).state;
+  type Codec=NonNullable<Parameters<typeof fetchMuteSettings>[2]>;
+  const state={version:1,hash:Buffer.alloc(128),indexValueMap:{}};
+  let queries=0;
+  const socket={query:async (node: Parameters<WASocket['query']>[0]) => {queries++;assert.equal(node.attrs.xmlns,'w:sync:app:state');return {tag:'iq',attrs:{}};}} as Pick<WASocket,'query'>;
+  const codecs: Codec={
+    extractSyncdPatches:async () => ({regular_high:queries===1 ? {snapshot:{},patches:[],hasMorePatches:true} : {patches:[{}],hasMorePatches:false}}) as unknown as Awaited<ReturnType<Codec['extractSyncdPatches']>>,
+    decodeSyncdSnapshot:async (_name,_snapshot,_key,_version,verify) => {assert.equal(verify,true); return {state,mutationMap:{a:{index:['mute','group@g.us'],syncAction:{value:{muteAction:{muted:true}}}},b:{index:['deleteChat','keep@g.us'],syncAction:{value:{deleteChatAction:{}}}}}};},
+    decodePatches:async (_name,_patches,_state,_key,_options,_version,_logger,verify) => {assert.equal(verify,true);return {state:{...state,version:2},mutationMap:{a:{index:['mute','group@g.us'],syncAction:{value:{muteAction:{muted:false}}}},b:{index:['mute','other@g.us'],syncAction:{value:{muteAction:{muted:true,muteEndTimestamp:1800000000000}}}}}};}
+  };
+  try {
+    const result=await fetchMuteSettings(socket,auth,codecs);
+    assert.deepEqual([...result], [['group@g.us',null],['other@g.us',1800000000000]]);assert.equal(queries,2);
+    queries=0;
+    await assert.rejects(fetchMuteSettings(socket,auth,{...codecs,extractSyncdPatches:async () => ({regular_high:{snapshot:{},patches:[],hasMorePatches:true}}) as unknown as Awaited<ReturnType<Codec['extractSyncdPatches']>>}),/batch limit/);
+    assert.equal(queries,5);
+    await auth.keys.set({'app-state-sync-key':{'aWQ=':{keyData:Buffer.alloc(32)}}});
+    await assert.rejects(fetchMuteSettings(socket,auth,{decodePatches,decodeSyncdSnapshot,
+      extractSyncdPatches:async () => ({regular_high:{snapshot:{version:{version:1},keyId:{id:Buffer.from('id')},mac:Buffer.alloc(32),records:[]},patches:[],hasMorePatches:false}}) as unknown as Awaited<ReturnType<Codec['extractSyncdPatches']>>}), /MAC|verification|snapshot/i);
+  } finally {store.close();}
+});
 
 test('desktop notifications only originate from new incoming notifications, never history, duplicates or our own messages', async () => {
   const store = new Store(':memory:'), events = new AppEvents(), ev = new EventEmitter();

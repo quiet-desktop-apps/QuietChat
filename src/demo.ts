@@ -10,6 +10,7 @@ export class DemoTransport implements Transport {
   private media = new Map<string, string>();
   constructor(private readonly store: Store, private readonly events: AppEvents, private readonly cache?: MediaCache) {}
   async start(): Promise<void> {
+    this.store.completeMuteSync();
     const chat = 'demo-alex@s.whatsapp.net', time = Math.floor(Date.now() / 1000);
     this.store.setSelf({ id: '447700900099@s.whatsapp.net', lid: '140000099@lid' });
     this.store.chat('447700900099@s.whatsapp.net', 'Demo account', time - 400);

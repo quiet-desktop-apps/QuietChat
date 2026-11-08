@@ -1,3 +1,4 @@
+import { muteDeadline } from './mutes.js';
 import { DatabaseSync } from 'node:sqlite';
 import { proto, normalizeMessageContent, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
 import { isChatJid, type Chat, type Message, type ReplyTarget } from './model.js';
@@ -42,6 +43,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS message_time ON messages(chat,time DESC,id DESC);
       CREATE INDEX IF NOT EXISTS message_global_time ON messages(time DESC);
       CREATE TABLE IF NOT EXISTS reactions(chat TEXT NOT NULL,id TEXT NOT NULL,sender TEXT NOT NULL,emoji TEXT NOT NULL,PRIMARY KEY(chat,id,sender),FOREIGN KEY(chat,id) REFERENCES messages(chat,id) ON DELETE CASCADE);
+      CREATE TABLE IF NOT EXISTS chat_mutes(id TEXT PRIMARY KEY, deadline INTEGER NOT NULL, revision INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS mute_deadline ON chat_mutes(deadline);
+      CREATE INDEX IF NOT EXISTS mute_revision ON chat_mutes(revision);
+      CREATE TABLE IF NOT EXISTS preferences(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auth(category TEXT NOT NULL,id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(category,id));`);
     if (!(this.db.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).some(column => column.name === 'expiration')) this.db.exec('ALTER TABLE chats ADD COLUMN expiration INTEGER NOT NULL DEFAULT 0');
     if (!(this.db.prepare('PRAGMA table_info(messages)').all() as { name: string }[]).some(column => column.name === 'quote')) this.db.exec('ALTER TABLE messages ADD COLUMN quote TEXT');
@@ -215,6 +220,48 @@ export class Store {
       coalesce((SELECT substr(group_concat(emoji,' '),1,512) FROM reactions r WHERE r.chat=messages.chat AND r.id=messages.id),'') reactions
       FROM messages WHERE chat=? AND id=?`).get(chat, id) as Row | undefined;
     return row ? this.present(row) : undefined;
+  }
+  setMute(id: string, value: number | null): void {
+    if (!isChatJid(id)) return;
+    const deadline = muteDeadline(value);
+    if (deadline === undefined) return;
+    // Keep explicit unmutes too: the newest setting wins across phone/LID aliases.
+    this.db.prepare(`INSERT INTO chat_mutes(id,deadline,revision) SELECT ?,?,coalesce(max(revision),0)+1 FROM chat_mutes WHERE true
+      ON CONFLICT(id) DO UPDATE SET deadline=excluded.deadline,revision=excluded.revision`).run(personId(id) || id,deadline);
+  }
+  muted(id: string, now = Date.now()): boolean {
+    const aliases = personId(id) ? this.personIds(id) : [id];
+    const row = this.db.prepare(`SELECT deadline FROM chat_mutes WHERE id IN (${aliases.map(() => '?').join(',')}) ORDER BY revision DESC LIMIT 1`).get(...aliases);
+    const deadline = Number(row?.deadline || 0);
+    return deadline < 0 || deadline > now;
+  }
+  muteRevision(): number { return Number(this.db.prepare('SELECT coalesce(max(revision),0) revision FROM chat_mutes').get()?.revision); }
+  restoreMutes(settings: Map<string, number | null>, startedAtRevision: number): void {
+    this.transaction(() => {
+      const liveRevision = this.muteRevision();
+      this.db.prepare('UPDATE chat_mutes SET deadline=0 WHERE revision<=?').run(startedAtRevision);
+      for (const [id, value] of settings) {
+        const aliases = personId(id) ? this.personIds(id) : [id];
+        const newer = this.db.prepare(`SELECT 1 FROM chat_mutes WHERE id IN (${aliases.map(() => '?').join(',')}) AND revision>? AND revision<=? LIMIT 1`).get(...aliases, startedAtRevision, liveRevision);
+        if (!newer) this.setMute(id, value);
+      }
+      this.completeMuteSync();
+    });
+  }
+  muteSyncReady(): boolean { return this.db.prepare("SELECT value FROM preferences WHERE key='mute-sync'").get()?.value === 'complete'; }
+  completeMuteSync(): void { this.db.prepare("INSERT OR REPLACE INTO preferences VALUES ('mute-sync','complete')").run(); }
+  notificationUnreadChats(now = Date.now()): Record<string, number> {
+    if (!this.muteSyncReady()) return {};
+    const result: Record<string, number> = {};
+    for (const row of this.db.prepare('SELECT id,unread FROM chats WHERE unread>0').iterate()) {
+      const id = String(row.id);
+      if (!this.muted(id, now)) result[id] = Number(row.unread);
+    }
+    return result;
+  }
+  nextMuteExpiry(now = Date.now()): number | undefined {
+    const deadline = this.db.prepare('SELECT min(deadline) deadline FROM chat_mutes WHERE deadline>?').get(now)?.deadline;
+    return typeof deadline === 'number' ? deadline : undefined;
   }
   unread(): number { return Number(this.db.prepare('SELECT coalesce(sum(unread),0) total FROM chats').get()?.total || 0); }
   unreadChats(): Record<string, number> {

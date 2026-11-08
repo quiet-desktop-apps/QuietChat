@@ -13,7 +13,7 @@ export type ReplyTarget = Pick<Message, 'chat' | 'id'>;
 export type Attachment = { path: string; kind: 'image' | 'video'; mime: string; size: number };
 export type Connection = { phase: 'connecting' | 'qr' | 'online' | 'offline' | 'logged-out'; detail: string };
 export class AppEvents extends EventEmitter<{
-  changed: []; incoming: [Message]; connection: [Connection]; qr: [string | undefined]; notice: [string];
+  changed: []; notificationPolicy: []; incoming: [Message]; connection: [Connection]; qr: [string | undefined]; notice: [string];
 }> {}
 export interface Transport {
   start(): Promise<void>;

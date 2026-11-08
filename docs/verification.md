@@ -4,6 +4,32 @@ Verified on **7 November 2026**, Linux, Node.js **22.22.2**, with the repository
 locked dependencies. No personal WhatsApp account was linked during development.
 
 
+## WhatsApp mute settings — 8 November 2026 (0.2.13)
+
+Muted direct chats and groups retain their sidebar unread counts while producing
+no desktop popup, dock count or tray count. Mute changes withdraw existing popups
+and cancel late avatar/notification completions. Expiry and unmute restore badge
+eligibility without replaying old messages as popups.
+
+Validation: 41 core tests passed. New coverage includes seconds/milliseconds,
+indefinite mutes (including the SDK's absent-expiry form), explicit unmute,
+omitted protobuf fields, restart persistence, phone/LID aliases, snapshot/live
+update races, missing keys and stale connection completions. The snapshot reader
+is tested with bounded synthetic responses and the SDK's real rejection of an
+invalid snapshot MAC. Its upgrade test verifies saved authentication/sync rows
+remain unchanged. No live account or server compatibility test was performed.
+
+The terminal PTY regression and full GTK/D-Bus suite passed. The mute scenarios
+exercise the real offline bridge, unread sidebar badges for direct/group chats,
+absence of avatar requests/popups for muted messages, dock/tray exclusion,
+expiry while hidden, unmute without popup replay, withdrawal of existing popups,
+and muting during an avatar fetch or pending notification-daemon reply. The
+installed launcher test opened 0.2.13 from the same checkout under isolated Xvfb.
+
+A full quit/reopen loads the change. Initial desktop alerts remain paused until
+the one-time mute-settings import completes. All verification data was synthetic;
+the existing real session was left running. No measured RSS reduction is claimed.
+
 ## Remaining group IDs and quoted mentions — 8 November 2026 (0.2.12)
 
 History `lidPnMappings`, previously saved Baileys reverse mappings, and group
