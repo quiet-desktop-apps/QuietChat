@@ -6,7 +6,9 @@ export type Message = {
   chat: string; id: string; sender: string; mine: boolean; time: number;
   text: string; kind: 'text' | 'image' | 'video' | 'unsupported';
   raw?: WAMessage; reactions: string; quote?: string;
+  senderId?: string; parts?: MessagePart[];
 };
+export type MessagePart = { text: string; jid?: string };
 export type ReplyTarget = Pick<Message, 'chat' | 'id'>;
 export type Attachment = { path: string; kind: 'image' | 'video'; mime: string; size: number };
 export type Connection = { phase: 'connecting' | 'qr' | 'online' | 'offline' | 'logged-out'; detail: string };

@@ -187,6 +187,49 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     assert popover and popover.get_visible(), f'Reaction picker did not open: {popover}'
     next(w for w in widgets(popover) if isinstance(w,Gtk.Button) and w.get_label()=='👍').emit('clicked')
     wait(lambda:any(m['id']=='native-link' and '👍' in m.get('reactions','') for m in app.messages),'reaction failed')
+    # Participant names and mentions use actual pointer activation, preserve drafts,
+    # and open a private conversation without sending the group draft.
+    def click_label_text(widget, text):
+        pump(.15)
+        adjustment = app.message_scroll.get_vadjustment()
+        ok, location = widget.compute_bounds(app.message_list); assert ok
+        adjustment.set_value(max(0, location.get_y()-80)); pump(.15)
+        ok, bounds = widget.compute_bounds(app.window); assert ok
+        ox, oy = widget.get_layout_offsets()
+        index = len(widget.get_text().split(text)[0].encode('utf8')) + 1
+        rect = widget.get_layout().index_to_pos(index)
+        px = int(bounds.get_x()+ox+rect.x/1024)
+        py = int(bounds.get_y()+oy+(rect.y+rect.height/2)/1024)
+        xt.XTestFakeMotionEvent(display,-1,px,py,0); x.XFlush(display); pump(.05)
+        xt.XTestFakeButtonEvent(display,1,1,0); xt.XTestFakeButtonEvent(display,1,0,0); x.XFlush(display); pump(.1)
+
+    group = 'demo-weekend@g.us'
+    app.open_chat_id(group)
+    wait(lambda: len(app.messages)==2, 'Group fixture did not load')
+    assert [m['sender'] for m in app.messages] == ['Ada (work)', 'Lin']
+    assert '@Ada (work)' in app.messages[1]['text'] and '@Lin' in app.messages[1]['text']
+    assert app.messages[1]['senderId']=='140000002@lid'
+    app.composer.get_buffer().set_text('Group draft kept')
+    app.copy_conversation()
+    assert '@Ada (work)' in clipboard() and '@140000001' not in clipboard()
+    author = next(w for w in widgets(app.message_boxes['group-saved']) if isinstance(w,Gtk.Label) and w.get_text()=='Ada (work)')
+    click_label_text(author, 'Ada')
+    wait(lambda: app.current['id']=='140000001@lid' and not app.messages, 'Clicking saved sender did not open its direct chat')
+    assert app.text()=='' and row_count('Group draft kept')==0
+    app.open_chat_id(group)
+    wait(lambda: len(app.messages)==2, 'Returning to group failed')
+    assert app.text()=='Group draft kept'
+    body = next(w for w in widgets(app.message_boxes['group-profile']) if isinstance(w,Gtk.Label) and 'Hi @Ada' in w.get_text())
+    click_label_text(body, '@Lin')
+    wait(lambda: app.current['id']=='140000002@lid' and not app.messages, 'Mention click did not open profile-only person')
+    app.open_chat_id(group); wait(lambda: len(app.messages)==2, 'Group reload failed')
+    assert app.text()=='Group draft kept' and row_count('Group draft kept')==0
+    # Profile text remains literal even when it looks like Pango markup.
+    from app import markup
+    escaped = Gtk.Label()
+    escaped.set_markup(markup('', [{'text':'@José & <b>Ana</b>', 'jid':'123@lid'}]))
+    assert escaped.get_text()=='@José & <b>Ana</b>'
+    app.open_chat_id('demo-alex@s.whatsapp.net'); wait(lambda: len(app.messages)>=5, 'Return to direct chat failed')
     app.bridge.request('demoQr')
     wait(lambda:app.content_stack.get_visible_child_name()=='qr' and app.qr_picture.get_paintable(),'native QR missing')
     assert (Path(state_dir)/'native-pairing.png').stat().st_mode & 0o777 == 0o600
@@ -239,7 +282,7 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     assert not app.chat_rows['avatar-1'].avatar_image.get_paintable(), 'Offscreen row retained its texture'
     assert len(avatar_calls)<35, 'Scrolling loaded unrelated rows'
     app.bridge.request=original_request
-    print(json.dumps({'native_smoke':'passed','checks':['GTK4 startup','saved-backend protocol','physical mouse drag and Ctrl+C/V','F6 reaction','native QR lifecycle','paste does not send','clipboard PNG/texture paste and caption','clipboard draft switching/replacement/removal','clipboard failed-send retention and cleanup','clipboard async chat-switch cancellation','Enter/Shift+Enter','Portuguese dead keys and Unicode composition','composition cancellation','quoted replies','per-chat drafts','copy chat','media thumbnails','chat list profile photos','lazy avatar scrolling and fallback','clickable URL','URL preview','tray menu protocol','bounded chat switching','close to tray','new-message badge','popup body/avatar','notification activation/read badge','red numbered tray and dock counters','notification dismissal and late-read races','notification ID recovery'],
+    print(json.dumps({'native_smoke':'passed','checks':['GTK4 startup','group sender and profile names','clickable participant names and mentions','mention copy and escaped names','group drafts survive direct-chat navigation','saved-backend protocol','physical mouse drag and Ctrl+C/V','F6 reaction','native QR lifecycle','paste does not send','clipboard PNG/texture paste and caption','clipboard draft switching/replacement/removal','clipboard failed-send retention and cleanup','clipboard async chat-switch cancellation','Enter/Shift+Enter','Portuguese dead keys and Unicode composition','composition cancellation','quoted replies','per-chat drafts','copy chat','media thumbnails','chat list profile photos','lazy avatar scrolling and fallback','clickable URL','URL preview','tray menu protocol','bounded chat switching','close to tray','new-message badge','popup body/avatar','notification activation/read badge','red numbered tray and dock counters','notification dismissal and late-read races','notification ID recovery'],
           'ui_rss_mib':round(resident(os.getpid())/1048576,1),'backend_rss_mib':round(resident(app.bridge.process.pid)/1048576,1),'total_rss_mib':round(after/1048576,1),'switch_growth_mib':round((after-baseline)/1048576,1)},indent=2))
 finally:
     clipboard_directory = Path(app.clipboard_images.directory.name) if app.clipboard_images.directory else None

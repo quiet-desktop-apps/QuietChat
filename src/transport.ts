@@ -73,8 +73,13 @@ export class WhatsAppTransport implements Transport {
     });
     const contacts = (items: Partial<Contact>[]) => {
       for (const contact of items) {
-        const name = contact.name || contact.notify || contact.verifiedName;
-        for (const id of [contact.id, contact.lid, contact.phoneNumber]) if (id) this.store.contact(id, name);
+        this.store.alias(contact.id, contact.lid);
+        this.store.alias(contact.id, contact.phoneNumber);
+        this.store.alias(contact.lid, contact.phoneNumber);
+        for (const id of [contact.id, contact.lid, contact.phoneNumber]) if (id) {
+          this.store.contact(id, contact.notify || contact.verifiedName, 0);
+          this.store.contact(id, contact.name);
+        }
       }
     };
     on('messaging-history.set', history => {
@@ -86,6 +91,7 @@ export class WhatsAppTransport implements Transport {
       });
       this.events.emit('changed');
     });
+    on('lid-mapping.update', mapping => { this.store.alias(mapping.lid, mapping.pn); this.events.emit('changed'); });
     on('contacts.upsert', items => { contacts(items); this.events.emit('changed'); });
     on('contacts.update', items => { contacts(items); this.events.emit('changed'); });
     on('chats.upsert', items => { for (const c of items) if (c.id) this.store.chat(c.id, c.name, Number(c.conversationTimestamp || 0), c.unreadCount, c.ephemeralExpiration); this.events.emit('changed'); });

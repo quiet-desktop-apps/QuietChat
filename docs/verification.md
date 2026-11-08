@@ -4,6 +4,34 @@ Verified on **7 November 2026**, Linux, Node.js **22.22.2**, with the repository
 locked dependencies. No personal WhatsApp account was linked during development.
 
 
+## Group participants and mentions — 8 November 2026 (0.2.9)
+
+Fixed history attribution using both key-level and top-level participant IDs.
+Saved contact names take priority over profile names, including explicitly linked
+phone/LID identities. Group titles are never used as a missing sender fallback.
+Protocol-declared mentions in text and image/video captions resolve at read time;
+raw protocol text remains unchanged for replies. No speculative @number matching.
+
+GTK sender and mention links open private conversations without sending, reuse
+known existing chats, preserve per-chat drafts, and discard stale navigation replies.
+Both frontends share resolved display names. A streaming schema migration learns
+available profile names from retained history without rewriting messages or auth.
+Legacy cached names remain protected because their original source was not stored.
+
+Validation: all 28 core tests passed, including legacy schema/profile recovery,
+alias mapping, contact-sync precedence, repeated/unknown mentions, emoji, caption
+mentions and URL exclusion. The PTY regression passed with explicit group-name
+and mention assertions. The full GTK/D-Bus suite passed, including physical sender
+and mention clicks, copied names, literal markup-like names, draft preservation,
+clipboard attachments, accents, replies, tray badges and notifications. All data
+was synthetic; live WhatsApp account interoperability was not exercised.
+
+The installed command launched from /tmp reported 0.2.9 and opened the same GTK
+checkout/application identity under Xvfb. Existing running instances need a full
+quit/reopen. The synthetic [group example](images/quietchat-group.png) was captured
+from the actual app with `scripts/capture-demo.py --group` and visually inspected.
+No browser engine, new dependency or eager profile-image loading was introduced.
+
 ## Dependabot integration — 8 November 2026 (0.2.8)
 
 Reviewed QuietChat PRs #2–#7 together. Updated SHA-pinned GitHub Actions to

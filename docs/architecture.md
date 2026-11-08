@@ -27,6 +27,7 @@ flowchart LR
 | `native/input_method.py` | Process-local Wayland/IBus selection; preserve explicit user choices |
 | `src/native-bridge.ts` | Typed backend operations over JSON lines; revisions for unread snapshots |
 | `src/transport.ts` | Baileys connection, QR lifecycle, sends and incoming events |
+| `src/identities.ts` | Participant IDs, safe profile names and protocol-declared mention parts |
 | `src/store.ts`, `src/auth.ts` | SQLite message/contact state, retention and saved authentication |
 | `src/media.ts`, `src/native-assets.ts` | File validation, download, previews and cache limits |
 | `src/ui.ts`, `src/terminal-*.ts` | Terminal widgets, keyboard handling and Unicode-width adaptation |
@@ -79,3 +80,28 @@ Tests cover typed operations, fake protocol events, storage, media fixtures,
 physical terminal/GTK keyboard input, clipboard, D-Bus notification races and
 bounded switching. These tests do not certify WhatsApp interoperability or account
 safety. See [verification](verification.md) and [memory](memory.md).
+
+## Participant identity and group mentions
+
+The message's participant ID is separate from its display name. History can carry
+that ID on `WebMessageInfo.participant`, while live messages normally use
+`key.participant`. Explicit phone/LID mappings from contacts, message alternate
+IDs and mapping events link the two address forms. Saved names outrank profile
+names. Legacy cached names have unknown provenance and remain preserved until
+explicit contact sync supplies a saved name. If WhatsApp has not supplied a name
+or mapping, the UI keeps the identifier; it does not infer identity from numbers.
+
+Schema version 1 adds contact-name provenance and an indexed phone/LID table.
+A one-time streaming pass learns profile names from retained protocol history;
+message bodies, raw reply keys and credentials are not rewritten. Read-time name
+resolution updates old messages as names arrive, using the existing 60-message
+page bound. Mention parts are derived only from declared mention metadata, with
+100 targets/occurrences per message; GTK receives at most 16,000 displayed text
+characters. Notification frames omit those parts and retain the 300-character
+text limit. No network lookup or permanent image cache is added for names.
+
+GTK escapes names into internal links; only participant IDs attached to that
+message can trigger direct-chat navigation. The backend resolves an existing
+linked direct chat where possible. Navigation preserves drafts and never sends a
+message. The terminal shares name resolution; participant-click navigation is a
+desktop feature.
