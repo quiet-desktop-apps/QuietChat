@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix='quietchat-install-check-') as directory
     env.pop('WAYLAND_DISPLAY',None)
     command=Path.home()/'.local/bin/quietchat'
     version=subprocess.check_output([str(command),'--version'],cwd='/tmp',env=env,text=True)
-    assert '0.2.9' in version,version
+    assert '0.2.10' in version,version
     with open(Path(directory)/'app.log','w+') as log:
         process=subprocess.Popen([str(command),'--demo'],cwd='/tmp',env=env,stdout=log,stderr=log)
         try:

@@ -1,0 +1,136 @@
+{
+  "date": "2026-11-08",
+  "scope": "Isolated offline GTK + Node demo under Xvfb; three chats, two media messages, ten chat round trips. No live account. MiB. First prototype comparison; not an overnight benchmark.",
+  "before": [
+    {
+      "phase": "visible-warm",
+      "messages": 5,
+      "sidebar_rows": 3,
+      "avatar_cache": 3,
+      "ui": {
+        "Rss": 187.44,
+        "Pss": 74.46,
+        "Private_Dirty": 55.03
+      },
+      "backend": {
+        "Rss": 113.57,
+        "Pss": 109.14,
+        "Private_Dirty": 62.83
+      }
+    },
+    {
+      "phase": "after-ten-switches",
+      "messages": 5,
+      "sidebar_rows": 3,
+      "avatar_cache": 3,
+      "ui": {
+        "Rss": 191.84,
+        "Pss": 77.61,
+        "Private_Dirty": 56.91
+      },
+      "backend": {
+        "Rss": 113.68,
+        "Pss": 109.25,
+        "Private_Dirty": 62.93
+      }
+    },
+    {
+      "phase": "hidden",
+      "messages": 0,
+      "sidebar_rows": 3,
+      "avatar_cache": 3,
+      "ui": {
+        "Rss": 191.6,
+        "Pss": 77.37,
+        "Private_Dirty": 56.68
+      },
+      "backend": {
+        "Rss": 102.7,
+        "Pss": 98.27,
+        "Private_Dirty": 51.95
+      }
+    },
+    {
+      "phase": "reopened",
+      "messages": 5,
+      "sidebar_rows": 3,
+      "avatar_cache": 3,
+      "ui": {
+        "Rss": 189.64,
+        "Pss": 76.85,
+        "Private_Dirty": 57.59
+      },
+      "backend": {
+        "Rss": 103.01,
+        "Pss": 98.58,
+        "Private_Dirty": 52.26
+      }
+    }
+  ],
+  "after": [
+    {
+      "phase": "visible-warm",
+      "messages": 5,
+      "sidebar_rows": 3,
+      "avatar_cache": 3,
+      "ui": {
+        "Rss": 186.51,
+        "Pss": 74.04,
+        "Private_Dirty": 54.4
+      },
+      "backend": {
+        "Rss": 113.65,
+        "Pss": 109.11,
+        "Private_Dirty": 62.79
+      }
+    },
+    {
+      "phase": "after-ten-switches",
+      "messages": 5,
+      "sidebar_rows": 3,
+      "avatar_cache": 3,
+      "ui": {
+        "Rss": 189.95,
+        "Pss": 76.25,
+        "Private_Dirty": 55.36
+      },
+      "backend": {
+        "Rss": 113.69,
+        "Pss": 109.15,
+        "Private_Dirty": 62.83
+      }
+    },
+    {
+      "phase": "hidden",
+      "messages": 0,
+      "sidebar_rows": 0,
+      "avatar_cache": 0,
+      "ui": {
+        "Rss": 187.06,
+        "Pss": 73.36,
+        "Private_Dirty": 52.47
+      },
+      "backend": {
+        "Rss": 102.4,
+        "Pss": 97.86,
+        "Private_Dirty": 51.55
+      }
+    },
+    {
+      "phase": "reopened",
+      "messages": 5,
+      "sidebar_rows": 3,
+      "avatar_cache": 3,
+      "ui": {
+        "Rss": 186.61,
+        "Pss": 73.93,
+        "Private_Dirty": 54.09
+      },
+      "backend": {
+        "Rss": 102.77,
+        "Pss": 98.22,
+        "Private_Dirty": 51.91
+      }
+    }
+  ]
+}

@@ -4,6 +4,20 @@ Verified on **7 November 2026**, Linux, Node.js **22.22.2**, with the repository
 locked dependencies. No personal WhatsApp account was linked during development.
 
 
+## Hidden display memory cleanup — 8 November 2026 (0.2.10)
+
+Core suite: 28 tests passed. Full native GTK/D-Bus regression passed with new
+assertions for zero hidden sidebar/avatar/message objects, late request rejection,
+no hidden display fetches, unchanged on-disk preview files, clipboard draft/reply
+restoration, image reload from cache, preserved history position, and continued
+notification delivery/badges. Existing clipboard, accents, group mentions and
+navigation checks remained enabled. Cleanup leaves the backend connected.
+
+A synthetic before/after measurement is recorded in [memory evidence](memory.md)
+and the accompanying numeric samples. It demonstrated resource release and a
+modest RSS reduction; it does not establish the cause of the overnight live-memory
+increase or promise recovery of all 30 MiB. Only synthetic state was accessed.
+
 ## Group participants and mentions — 8 November 2026 (0.2.9)
 
 Fixed history attribution using both key-level and top-level participant IDs.

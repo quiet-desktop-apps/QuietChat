@@ -50,7 +50,7 @@ tests use synthetic accounts and never message your contacts.
 
 - Chat/contact rows show small circular profile photos, with initials when no photo
   is available. Photos load as rows become visible; the in-memory avatar cache holds
-  at most 64 tiny 36×36 images.
+  decoded photos for visible rows; offscreen photos remain cached on disk.
 - Group messages show your saved contact name first, then the person's available
   WhatsApp profile name. A group title is never used as a participant's name.
   If no name has synced, the identifier remains visible; missing sender metadata
@@ -159,3 +159,12 @@ This offline example uses synthetic people: **Ada (work)** is a saved contact,
 while **Lin** is known only by the profile name. Mentions use those same names.
 
 ![Synthetic group conversation with named participants and clickable mentions](images/quietchat-group.png)
+
+## Disk cache and tray memory
+
+Closing to the tray clears message and contact-list widgets, decoded photos and
+previews from the window. Cached image files remain on disk, so reopening can use
+them again. Text, reply and image-attachment drafts remain available; the WhatsApp
+connection, unread indicators and notifications stay active. Offscreen sidebar
+photos also leave the decoded-image cache when you scroll. The runtime may retain
+some RAM for reuse, so hiding is not a guarantee of a particular memory number.

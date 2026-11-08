@@ -243,10 +243,12 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     gc.collect(); pump(.3)
     after=resident(os.getpid())+resident(app.bridge.process.pid)
     assert after-baseline<40*1048576,f'Repeated chat switches grew RSS by {(after-baseline)/1048576:.1f} MiB'
+    runpy.run_path(str(ROOT/'scripts/cache-smoke.py'))['exercise'](app, ROOT, state_dir, pump, wait)
     app.window.close(); pump(.2)
     assert not app.window.get_visible() and not app.messages and not app.message_boxes,'close did not hide/release the page'
     app.bridge.request('demoIncoming',chat='demo-sam@s.whatsapp.net',text='Offline notification test 👋')
     wait(lambda:len(notifications)==1 and app.desktop.unread>0,'tray/popup missing')
+    assert not app.chat_rows and not app.chat_avatars and not app.messages, 'Notification recreated hidden display widgets'
     popup=notifications[0]
     assert popup[3]=='Sam · demo' and 'Offline notification test' in popup[4]
     assert 'image-path' in popup[6] and Path(popup[6]['image-path']).exists(),'avatar missing from notification'
@@ -280,9 +282,10 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     sidebar_adj.set_value(sidebar_adj.get_upper()-sidebar_adj.get_page_size())
     wait(lambda:app.chat_rows['avatar-79'].avatar_image.get_paintable(),'scrolling did not load newly visible photo')
     assert not app.chat_rows['avatar-1'].avatar_image.get_paintable(), 'Offscreen row retained its texture'
+    assert 'avatar-1' not in app.chat_avatars, 'Offscreen texture survived in the RAM cache'
     assert len(avatar_calls)<35, 'Scrolling loaded unrelated rows'
     app.bridge.request=original_request
-    print(json.dumps({'native_smoke':'passed','checks':['GTK4 startup','group sender and profile names','clickable participant names and mentions','mention copy and escaped names','group drafts survive direct-chat navigation','saved-backend protocol','physical mouse drag and Ctrl+C/V','F6 reaction','native QR lifecycle','paste does not send','clipboard PNG/texture paste and caption','clipboard draft switching/replacement/removal','clipboard failed-send retention and cleanup','clipboard async chat-switch cancellation','Enter/Shift+Enter','Portuguese dead keys and Unicode composition','composition cancellation','quoted replies','per-chat drafts','copy chat','media thumbnails','chat list profile photos','lazy avatar scrolling and fallback','clickable URL','URL preview','tray menu protocol','bounded chat switching','close to tray','new-message badge','popup body/avatar','notification activation/read badge','red numbered tray and dock counters','notification dismissal and late-read races','notification ID recovery'],
+    print(json.dumps({'native_smoke':'passed','checks':['GTK4 startup','group sender and profile names','clickable participant names and mentions','mention copy and escaped names','group drafts survive direct-chat navigation','saved-backend protocol','physical mouse drag and Ctrl+C/V','F6 reaction','native QR lifecycle','paste does not send','clipboard PNG/texture paste and caption','clipboard draft switching/replacement/removal','clipboard failed-send retention and cleanup','clipboard async chat-switch cancellation','Enter/Shift+Enter','Portuguese dead keys and Unicode composition','composition cancellation','quoted replies','per-chat drafts','copy chat','media thumbnails','chat list profile photos','lazy avatar scrolling and fallback','clickable URL','URL preview','tray menu protocol','bounded chat switching','close to tray','hidden widget/avatar release','disk-cache and clipboard draft retention','late hidden callback rejection','history position restored','new-message badge','popup body/avatar','notification activation/read badge','red numbered tray and dock counters','notification dismissal and late-read races','notification ID recovery'],
           'ui_rss_mib':round(resident(os.getpid())/1048576,1),'backend_rss_mib':round(resident(app.bridge.process.pid)/1048576,1),'total_rss_mib':round(after/1048576,1),'switch_growth_mib':round((after-baseline)/1048576,1)},indent=2))
 finally:
     clipboard_directory = Path(app.clipboard_images.directory.name) if app.clipboard_images.directory else None
