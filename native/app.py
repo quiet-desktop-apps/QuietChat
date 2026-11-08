@@ -285,11 +285,17 @@ class QuietChat(Gtk.Application):
             message = event['message']
             if self.current and message['chat'] == self.current['id'] and self.window.get_visible() and self.window.is_active() and self.offset == 0:
                 self.mark_read(); return
-            if self.settings['notifications']:
+            if self.settings['notifications'] and event.get('notify', True):
                 ticket = self.desktop.begin_notification(message['chat'])
                 title = event['chat_name']
                 body = (message['sender'] + ':\n' if message['chat'].endswith('@g.us') else '') + message['text']
-                self.bridge.request('avatar', lambda result, error: self.desktop.notify(message['chat'], title, body, result.get('path') if result else None, ticket=ticket), chat=event.get('avatar_id',message['chat']))
+                def avatar_ready(result, error):
+                    def policy_ready(policy, policy_error):
+                        if policy_error or not self.apply_unread(policy) or not policy['eligible'] or not self.settings['notifications']:
+                            ticket['cancelled'] = True
+                        self.desktop.notify(message['chat'], title, body, result.get('path') if result else None, ticket=ticket)
+                    self.bridge.request('notificationState', policy_ready, chat=message['chat'])
+                self.bridge.request('avatar', avatar_ready, chat=event.get('avatar_id',message['chat']))
         elif kind == 'qr':
             self.qr_path = event.get('path')
             if self.qr_path:
@@ -320,7 +326,7 @@ class QuietChat(Gtk.Application):
         self.unread_revision = revision
         if 'unread_chats' in state:
             self.unread_chats = state['unread_chats']
-            self.desktop.reconcile_unread(self.unread_chats)
+            self.desktop.reconcile_unread(state.get('notification_chats', self.unread_chats))
         else: self.desktop.set_unread(state.get('unread',0))
         return True
 

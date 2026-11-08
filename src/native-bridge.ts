@@ -41,10 +41,11 @@ async function main(): Promise<void> {
   const settingsPath = join(directory, 'native-settings.json');
   let settings = { notifications: true, background: true, thumbnails: true };
   try { const saved = JSON.parse(await readFile(settingsPath, 'utf8')); for (const key of Object.keys(settings) as (keyof typeof settings)[]) if (typeof saved[key] === 'boolean') settings[key] = saved[key]; } catch {}
+  let muteExpiry: NodeJS.Timeout | undefined;
   let closing = false, generation = 0, pending = 0, changed: NodeJS.Timeout | undefined;
   function shutdown(): void {
     if (closing) return;
-    closing = true; clearTimeout(changed); transport.stop(); viewer.close();
+    closing = true; clearTimeout(changed); clearTimeout(muteExpiry); transport.stop(); viewer.close();
     rmSync(qrPath, { force: true }); store.close(); unlock();
     if (temporary) rmSync(temporary, { recursive: true, force: true });
     process.exit(0);
@@ -55,13 +56,19 @@ async function main(): Promise<void> {
   events.on('connection', connection => emit('connection', { connection }));
   events.on('notice', message => emit('notice', { message }));
   let unreadRevision = 0;
-  const unreadState = () => ({ revision: unreadRevision, unread: store.unread(), unread_chats: store.unreadChats() });
-  events.on('changed', () => { unreadRevision++; if (!changed) changed = setTimeout(() => { changed = undefined; emit('changed', unreadState()); }, 120); });
+  const unreadState = () => ({ revision: unreadRevision, unread: store.unread(), unread_chats: store.unreadChats(), notification_chats: store.notificationUnreadChats() });
+  function scheduleMuteExpiry(): void {
+    clearTimeout(muteExpiry); muteExpiry = undefined;
+    const deadline = store.nextMuteExpiry();
+    if (deadline !== undefined) muteExpiry = setTimeout(() => events.emit('notificationPolicy'), Math.min(2_147_483_647, Math.max(1, deadline - Date.now())));
+  }
+  events.on('notificationPolicy', () => { unreadRevision++; emit('changed', unreadState()); scheduleMuteExpiry(); });
+  events.on('changed', () => { unreadRevision++; if (!changed) changed = setTimeout(() => { changed = undefined; emit('changed', unreadState()); scheduleMuteExpiry(); }, 120); });
   events.on('incoming', message => {
     unreadRevision++;
     const raw = store.raw({ remoteJid: message.chat, id: message.id });
     emit('incoming', { message: { ...message, text: message.text.slice(0,300), parts: undefined, raw: undefined }, chat_name: store.displayName(message.chat) || message.chat,
-      avatar_id: message.senderId || raw?.key.participant || message.chat, ...unreadState() });
+      notify: store.muteSyncReady() && !store.muted(message.chat), avatar_id: message.senderId || raw?.key.participant || message.chat, ...unreadState() });
   });
   events.on('qr', qr => {
     const own = ++generation;
@@ -95,6 +102,7 @@ async function main(): Promise<void> {
         return { chat, offset, messages: store.messages(chat, offset).map(messageView), page_size: PAGE_SIZE, name: store.displayName(chat) || chat };
       }
       case 'person': return store.directChat(String(command.person || ''));
+      case 'notificationState': return { ...unreadState(), eligible: store.muteSyncReady() && !store.muted(chat) && !!store.unreadChats()[chat] };
       case 'read': store.markViewed(chat); events.emit('changed'); return unreadState();
       case 'send': {
         if (String(command.text || '').length > 16000) throw new Error('Messages are limited to 16,000 characters.');
@@ -140,6 +148,11 @@ async function main(): Promise<void> {
         if (!values.demo) throw new Error('Only available in offline demo.');
         events.emit('qr', command.clear ? undefined : 'QuietChat-offline-QR-rendering-test'); return {};
       }
+      case 'demoMute': {
+        if (!values.demo) throw new Error('Only available in offline demo.');
+        store.setMute(chat, command.deadline === null ? null : Number(command.deadline));
+        events.emit('notificationPolicy'); return unreadState();
+      }
       case 'demoIncoming': {
         if (!values.demo) throw new Error('Only available in offline demo.');
         const target = chat || 'demo-sam@s.whatsapp.net', mid = randomUUID();
@@ -169,6 +182,7 @@ async function main(): Promise<void> {
   const version = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
   emit('ready', { directory, version, demo: !!values.demo, settings });
   await transport.start();
+  scheduleMuteExpiry();
   if (values.demo) {
     const now = Math.floor(Date.now()/1000), chat = 'demo-alex@s.whatsapp.net';
     store.put({ key: { remoteJid: chat, id: 'native-own', fromMe: true }, messageTimestamp: now - 10,

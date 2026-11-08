@@ -1,5 +1,6 @@
 import makeWASocket, { Browsers, DisconnectReason, downloadMediaMessage, normalizeMessageContent, type WASocket, type BaileysEventMap, type Contact } from '@whiskeysockets/baileys';
 import pino from 'pino';
+import { fetchMuteSettings } from './mute-sync.js';
 import { sqliteAuth } from './auth.js';
 import { AppEvents, type Attachment, type Message, type ReplyTarget, type Transport } from './model.js';
 import { MediaCache } from './media.js';
@@ -18,9 +19,10 @@ export class WhatsAppTransport implements Transport {
   private attempt = 0;
   private generation = 0;
   private downloading = false;
+  private muteSyncAttempt = 0;
   private readonly logger = pino({ level: 'silent' });
   private readonly auth;
-  constructor(private readonly store: Store, private readonly events: AppEvents, private readonly cache: MediaCache, private readonly createSocket: typeof makeWASocket = makeWASocket) {
+  constructor(private readonly store: Store, private readonly events: AppEvents, private readonly cache: MediaCache, private readonly createSocket: typeof makeWASocket = makeWASocket, private readonly readMuteSettings = fetchMuteSettings) {
     this.auth = sqliteAuth(store, () => this.events.emit('changed'));
     this.store.setSelf(this.auth.state.creds.me);
   }
@@ -50,6 +52,7 @@ export class WhatsAppTransport implements Transport {
       const changed = this.store.setSelf(update.me ?? this.auth.state.creds.me);
       this.auth.save();
       if (changed) this.events.emit('changed');
+      if (this.online) void this.syncMuteSettings(socket, generation);
     });
     on('connection.update', update => {
       if (update.qr) {
@@ -61,6 +64,7 @@ export class WhatsAppTransport implements Transport {
         if (this.store.setSelf(this.auth.state.creds.me)) this.events.emit('changed');
         this.events.emit('qr', undefined);
         this.events.emit('connection', { phase: 'online', detail: 'Connected · waiting for messages/history' });
+        void this.syncMuteSettings(socket, generation);
       }
       if (update.connection === 'close') {
         this.online = false; this.events.emit('qr', undefined);
@@ -96,19 +100,25 @@ export class WhatsAppTransport implements Transport {
       this.store.transaction(() => {
         for (const pair of history.lidPnMappings || []) this.store.alias(pair.lid, pair.pn);
         contacts(history.contacts);
-        for (const chat of history.chats) if (chat.id) this.store.chat(chat.id, chat.name, Number(chat.conversationTimestamp || 0), chat.unreadCount, chat.ephemeralExpiration);
+        this.storeChats(history.chats);
         for (const message of history.messages) this.store.put(message);
         this.store.prune();
       });
-      this.events.emit('changed');
+      this.events.emit('notificationPolicy'); this.events.emit('changed');
     });
     on('groups.update', groups => { for (const group of groups) contacts(group.participants || []); this.events.emit('changed'); });
     on('group-participants.update', group => { contacts(group.participants); this.events.emit('changed'); });
     on('lid-mapping.update', mapping => { this.store.alias(mapping.lid, mapping.pn); this.events.emit('changed'); });
     on('contacts.upsert', items => { contacts(items); this.events.emit('changed'); });
     on('contacts.update', items => { contacts(items); this.events.emit('changed'); });
-    on('chats.upsert', items => { for (const c of items) if (c.id) this.store.chat(c.id, c.name, Number(c.conversationTimestamp || 0), c.unreadCount, c.ephemeralExpiration); this.events.emit('changed'); });
-    on('chats.update', items => { for (const c of items) if (c.id) this.store.chat(c.id, c.name, Number(c.conversationTimestamp || 0), c.unreadCount, c.ephemeralExpiration); this.events.emit('changed'); });
+    const updateChats = (items: Partial<BaileysEventMap['chats.upsert'][number]>[], incremental: boolean) => {
+      let muteChanged = false;
+      this.store.transaction(() => { muteChanged = this.storeChats(items, incremental); });
+      if (muteChanged) this.events.emit('notificationPolicy');
+      this.events.emit('changed');
+    };
+    on('chats.upsert', items => updateChats(items, false));
+    on('chats.update', items => updateChats(items, true));
     on('chats.delete', ids => { for (const id of ids) this.store.removeChat(id); void this.cache.clear().catch(() => this.events.emit('notice', 'Could not clear media cache.')); this.events.emit('changed'); });
     on('messages.upsert', event => {
       const incoming: Message[] = [];
@@ -143,6 +153,34 @@ export class WhatsAppTransport implements Transport {
       for (const { key, reaction } of reactions) this.store.reactions(key, reaction.text || '', reaction.key?.fromMe ? 'me' : reaction.key?.participant || reaction.key?.remoteJid || 'unknown');
       this.events.emit('changed');
     });
+  }
+  private storeChats(items: Partial<BaileysEventMap['chats.upsert'][number]>[], incremental = false): boolean {
+    let muteChanged = false;
+    for (const chat of items) if (chat.id) {
+      this.store.chat(chat.id, chat.name, Number(chat.conversationTimestamp || 0), chat.unreadCount, chat.ephemeralExpiration);
+      if (!Object.hasOwn(chat, 'muteEndTime') || chat.muteEndTime === undefined) continue;
+      let deadline = chat.muteEndTime === null ? null : Number(chat.muteEndTime);
+      // Sync actions use null for unmute. Muted=true with no expiry is emitted
+      // as zero by Baileys. History's explicit zero, in contrast, means unmuted.
+      if (incremental && deadline === 0) deadline = -1;
+      this.store.setMute(chat.id, deadline); muteChanged = true;
+    }
+    return muteChanged;
+  }
+  private async syncMuteSettings(socket: WASocket, generation: number): Promise<void> {
+    if (this.store.muteSyncReady() || this.muteSyncAttempt === generation || !this.auth.state.creds.myAppStateKeyId) return;
+    this.muteSyncAttempt = generation;
+    this.events.emit('notice', 'Syncing muted chats; desktop alerts are paused until settings arrive.');
+    try {
+      const revision = this.store.muteRevision();
+      const settings = await this.readMuteSettings(socket, this.auth.state);
+      if (this.stopped || generation !== this.generation) return;
+      this.store.restoreMutes(settings, revision);
+      this.events.emit('notificationPolicy');
+      this.events.emit('notice', 'WhatsApp mute settings synced. Only unmuted chats trigger desktop alerts.');
+    } catch {
+      if (!this.stopped && generation === this.generation) this.events.emit('notice', 'Mute settings could not be synced. Desktop alerts stay paused; reconnect to retry.');
+    }
   }
   stop(): void {
     this.stopped = true; this.online = false; this.generation++;

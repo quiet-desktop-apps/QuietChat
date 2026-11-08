@@ -132,3 +132,30 @@ payload lacks metadata, the matching retained original can supply it only if the
 text matches exactly. Missing originals and ordinary numeric text are not guessed.
 Quotes remain capped at 200 characters and private quoted content stays hidden;
 protocol reply payloads and message keys are never rewritten.
+
+## Synced mute policy
+
+`chat_mutes` persists WhatsApp mute deadlines and a local update revision. Explicit
+unmutes are retained so the newest setting wins across linked phone/LID identities.
+History and incremental updates preserve omitted fields; timed mutes accept Unix
+seconds/milliseconds, and indefinite mutes remain silent. Sidebar unread counts
+continue to include muted chats. The native bridge provides a separate filtered
+notification map for both the dock and tray, and checks popup eligibility again
+after avatar completion. Policy changes immediately cancel pending popups and
+withdraw existing ones, using the same revision rules as read-state updates.
+One backend timer handles the next expiry, including when the UI is hidden;
+unmuting/expiry restores badges without replaying old popups.
+
+Versions before 0.2.13 discarded mute settings. The first eligible connection now
+reads a verified `regular_high` settings snapshot through Baileys' query/decoding
+APIs and imports only mute actions. This does not modify the SDK sync cursor or
+replay chat-deletion/read/history actions. SDK MAC verification is enabled; decoder
+warnings reject the refresh rather than accepting partial policy. Queries have
+15-second timeouts, external fetches a 30-second signal, and the refresh is limited
+to five batches and 10,000 mute entries. Temporary snapshot data is released after
+import; there is no additional long-lived contact cache or per-chat timer.
+Newer live updates take precedence over the in-flight snapshot. Desktop alerts and
+badges stay paused until the initial import succeeds; messages and in-app counts
+continue. A failure shows a reconnect notice and does not retry continuously.
+Normal synced updates are used after this one-time import, without writing any
+mute preference back to the phone.
