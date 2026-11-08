@@ -89,7 +89,7 @@ def row_count(text):
         return db.execute('SELECT count(*) FROM messages WHERE text=?',(text,)).fetchone()[0]
 
 try:
-    wait(lambda:app.ready and len(app.chat_rows)==3 and app.desktop.available,'native startup/tray registration failed')
+    wait(lambda:app.ready and len(app.chat_rows)==4 and app.desktop.available,'native startup/tray registration failed')
     # The ready frame's temporary state directory can be derived from this child only.
     matches=list(Path('/tmp').glob('quietchat-native-demo-*/instance.lock'))
     state_dir=next(path.parent for path in matches if path.read_text().strip()==str(app.bridge.process.pid))
@@ -224,6 +224,11 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     wait(lambda: app.current['id']=='140000002@lid' and not app.messages, 'Mention click did not open profile-only person')
     app.open_chat_id(group); wait(lambda: len(app.messages)==2, 'Group reload failed')
     assert app.text()=='Group draft kept' and row_count('Group draft kept')==0
+    body = next(w for w in widgets(app.message_boxes['group-profile']) if isinstance(w,Gtk.Label) and '@You' in w.get_text())
+    click_label_text(body, '@You')
+    wait(lambda: app.current['id']=='447700900099@s.whatsapp.net' and app.current['name']=='You', 'Self mention did not open You chat')
+    app.open_chat_id('447700900099@s.whatsapp.net')
+    wait(lambda: app.current['id']=='447700900099@s.whatsapp.net' and app.current['name']=='You', 'Self chat was not labeled You')
     # Profile text remains literal even when it looks like Pango markup.
     from app import markup
     escaped = Gtk.Label()

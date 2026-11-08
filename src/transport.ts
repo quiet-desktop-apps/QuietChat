@@ -20,7 +20,10 @@ export class WhatsAppTransport implements Transport {
   private downloading = false;
   private readonly logger = pino({ level: 'silent' });
   private readonly auth;
-  constructor(private readonly store: Store, private readonly events: AppEvents, private readonly cache: MediaCache, private readonly createSocket: typeof makeWASocket = makeWASocket) { this.auth = sqliteAuth(store); }
+  constructor(private readonly store: Store, private readonly events: AppEvents, private readonly cache: MediaCache, private readonly createSocket: typeof makeWASocket = makeWASocket) {
+    this.auth = sqliteAuth(store);
+    this.store.setSelf(this.auth.state.creds.me);
+  }
   async start(): Promise<void> { this.stopped = false; this.connect(); }
   private connect(): void {
     if (this.stopped) return;
@@ -42,7 +45,12 @@ export class WhatsAppTransport implements Transport {
         try { handler(event); } catch (error) { this.events.emit('notice', `Could not process ${name}: ${(error as Error).message}`); }
       });
     };
-    on('creds.update', () => this.auth.save());
+    on('creds.update', update => {
+      // Pairing supplies the phone ID; connection updates may add the LID.
+      const changed = this.store.setSelf(update.me ?? this.auth.state.creds.me);
+      this.auth.save();
+      if (changed) this.events.emit('changed');
+    });
     on('connection.update', update => {
       if (update.qr) {
         this.events.emit('connection', { phase: 'qr', detail: 'Scan the QR code with WhatsApp → Linked devices' });
@@ -50,6 +58,7 @@ export class WhatsAppTransport implements Transport {
       }
       if (update.connection === 'open') {
         this.online = true; this.attempt = 0; this.auth.save();
+        if (this.store.setSelf(this.auth.state.creds.me)) this.events.emit('changed');
         this.events.emit('qr', undefined);
         this.events.emit('connection', { phase: 'online', detail: 'Connected · waiting for messages/history' });
       }

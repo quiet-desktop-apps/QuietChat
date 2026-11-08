@@ -222,6 +222,62 @@ test('contact sync preserves saved names and maps LID/phone identities, includin
   } finally { adapter.stop(); store.close(); }
 });
 
+test('account identity labels self chats and mentions without changing contacts, raw text or routing', () => {
+  const store = new Store(':memory:'), pn = '447700900099@s.whatsapp.net', lid = '140000099@lid', group = 'self-test@g.us';
+  try {
+    store.contact(pn, 'Saved account name'); store.chat(pn, 'Old phone label');
+    store.contact(lid, 'Profile name', 0); store.chat(lid);
+    store.chat(group, 'Group title');
+    const raw: WAMessage = { key: { remoteJid: group, id: 'self-mention', participant: '123@lid' },
+      message: { extendedTextMessage: { text: '@140000099 and @447700900099', contextInfo: { mentionedJid: [lid, pn] } } } };
+    store.put(raw);
+    assert.equal(store.setSelf({ id: '447700900099:8@s.whatsapp.net' }), true);
+    assert.equal(store.displayName(pn), 'You');
+    assert.notEqual(store.displayName(lid), 'You', 'Unmapped IDs cannot be guessed');
+    store.alias(lid, pn); // Mapping may arrive after account identity/history.
+    assert.equal(store.displayName(lid), 'You');
+    assert.equal(store.personName('447700900099:2@s.whatsapp.net'), 'You');
+    for (const list of [store.listChats(), store.listContacts(), store.listChats('you'), store.listContacts('YOU')]) {
+      assert.equal(list.filter(c => c.name === 'You').length, 2);
+    }
+    assert.equal(store.listChats('900099').filter(c => c.name === 'You').length, 1);
+    assert.equal(store.displayName(group), 'Group title');
+    assert.equal(store.personName('447700900098@s.whatsapp.net'), undefined);
+    const view = store.message(group, 'self-mention')!;
+    assert.equal(view.text, '@You and @You');
+    assert.deepEqual(view.parts?.filter(p => p.jid).map(p => p.jid), [lid, pn]);
+    assert.equal(store.raw(raw.key)?.message?.extendedTextMessage?.text, '@140000099 and @447700900099');
+    assert.equal(store.directChat(lid).id, lid); assert.equal(store.directChat(pn).name, 'You');
+    assert.equal(store.setSelf({ id: pn }), false, 'Device suffixes do not change identity');
+    store.setSelf({ id: 'other@s.whatsapp.net', lid: '999@lid' });
+    assert.equal(store.personName(pn), 'Saved account name', 'Account changes must remove the old overlay');
+    store.setSelf(); assert.equal(store.personName('999@lid'), undefined);
+  } finally { store.close(); }
+});
+
+test('saved login and pairing identity updates supply self labels to the shared store', async () => {
+  const store = new Store(':memory:'), events = new AppEvents(), ev = new EventEmitter();
+  const auth = sqliteAuth(store), pn = '447700900099@s.whatsapp.net', lid = '140000099@lid';
+  auth.state.creds.me = { id: '447700900099:7@s.whatsapp.net', name: 'Profile' }; auth.save();
+  let options: Partial<SocketConfig> | undefined, changes = 0;
+  events.on('changed', () => { changes++; });
+  const adapter = new WhatsAppTransport(store, events, new MediaCache('/unused'), config => {
+    options = config; return { ev, end() {} } as unknown as WASocket;
+  });
+  try {
+    assert.equal(store.displayName(pn), 'You', 'Saved identity works before connecting');
+    await adapter.start();
+    const me = { ...options!.auth!.creds.me!, lid: '140000099:3@lid' };
+    Object.assign(options!.auth!.creds, { me }); ev.emit('creds.update', { me });
+    assert.equal(store.displayName(lid), 'You'); assert.equal(changes, 1);
+    ev.emit('creds.update', {}); assert.equal(changes, 1, 'Key saves do not trigger display refreshes');
+    ev.emit('connection.update', { connection: 'open' }); assert.equal(store.displayName(lid), 'You');
+    assert.equal(sqliteAuth(store).state.creds.me?.lid, me.lid);
+    adapter.stop(); ev.emit('creds.update', { me: { id: 'other@s.whatsapp.net' } });
+    assert.equal(store.displayName(pn), 'You', 'Stopped socket events cannot replace account identity');
+  } finally { adapter.stop(); store.close(); }
+});
+
 test('existing history gains participant profiles without changing stored messages or credentials', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'quietchat-person-migration-'));
   const path = join(directory, 'test.db'), group = 'old@g.us';

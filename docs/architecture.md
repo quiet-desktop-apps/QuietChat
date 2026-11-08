@@ -110,3 +110,10 @@ message can trigger direct-chat navigation. The backend resolves an existing
 linked direct chat where possible. Navigation preserves drafts and never sends a
 message. The terminal shares name resolution; participant-click navigation is a
 desktop feature.
+
+The signed-in account supplies normalized phone and LID identities from saved
+credentials, pairing and connection updates. These override display names with
+`You`, including `@You` in declared mentions and searchable self-chat/contact
+labels. Only the two current account IDs are retained in memory; alias resolution
+uses the existing indexed table. No network lookup or new cache is introduced.
+Saved contact names, message bodies and routing IDs remain unchanged.

@@ -22,7 +22,7 @@ def sample(phase):
     return out
 app=QuietChat(demo=True); app.register(None); app.activate()
 try:
-    wait(lambda: app.ready and len(app.chat_rows)==3)
+    wait(lambda: app.ready and len(app.chat_rows)==4)
     app.open_chat_id('demo-alex@s.whatsapp.net')
     wait(lambda:len(app.messages)>=5 and app.asset_running==0 and app.avatar_request is None);pump(3)
     samples=[sample('visible-warm')]

@@ -33,6 +33,7 @@ export function describeMessage(raw: WAMessage): Omit<Message, 'reactions'> | un
 
 export class Store {
   readonly db: DatabaseSync;
+  private selfIds: string[] = [];
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;
@@ -80,6 +81,17 @@ export class Store {
     const [lid, pn] = a.endsWith('@lid') ? [a,b] : [b,a];
     this.db.prepare('INSERT INTO person_aliases VALUES (?,?) ON CONFLICT(lid) DO UPDATE SET pn=excluded.pn').run(lid,pn);
   }
+  // Account identity is a display overlay, never a replacement for saved names.
+  // Keep only the current account's two IDs; aliases stay in the existing index.
+  setSelf(me?: { id?: string; lid?: string }): boolean {
+    const ids = [...new Set([personId(me?.id), personId(me?.lid)].filter((id): id is string => !!id))];
+    if (ids.join('|') === this.selfIds.join('|')) return false;
+    this.alias(me?.id, me?.lid);
+    this.selfIds = ids;
+    return true;
+  }
+  private selfAliases(): string[] { return [...new Set(this.selfIds.flatMap(id => this.personIds(id)))]; }
+  private isSelf(id: string): boolean { return this.selfIds.length > 0 && this.personIds(id).some(alias => this.selfIds.includes(alias)); }
   private personIds(id: string): string[] {
     const person = personId(id);
     if (!person) return [];
@@ -93,6 +105,7 @@ export class Store {
     return aliases;
   }
   personName(id: string): string | undefined {
+    if (this.isSelf(id)) return 'You';
     const aliases = this.personIds(id), person = aliases[0];
     if (!person) return;
     const slots = aliases.map(() => '?').join(',');
@@ -150,14 +163,20 @@ export class Store {
   clearMessages(id: string): void { this.db.prepare('DELETE FROM messages WHERE chat=?').run(id); }
   listChats(search = ''): Chat[] {
     const pattern = `%${search.replace(/[\\%_]/g, '\\$&')}%`;
-    return this.db.prepare(`SELECT c.id, coalesce(nullif(c.name,''),p.name,c.id) name, c.updated,c.unread,
+    const self = this.selfAliases(), slots = self.map(() => '?').join(',') || 'NULL';
+    return (this.db.prepare(`SELECT c.id, coalesce(nullif(c.name,''),p.name,c.id) name, c.updated,c.unread,
       coalesce((SELECT substr(text,1,140) FROM messages m WHERE m.chat=c.id ORDER BY time DESC,id DESC LIMIT 1),'') preview
       FROM chats c LEFT JOIN contacts p ON p.id=c.id WHERE c.id LIKE ? ESCAPE '\\' OR coalesce(nullif(c.name,''),p.name,c.id) LIKE ? ESCAPE '\\'
-      ORDER BY c.updated DESC,c.id LIMIT 200`).all(pattern, pattern) as Chat[];
+      OR (c.id IN (${slots}) AND 'You' LIKE ? ESCAPE '\\')
+      ORDER BY c.updated DESC,c.id LIMIT 200`).all(pattern, pattern, ...self, pattern) as Chat[])
+      .map(chat => self.includes(personId(chat.id) || '') ? { ...chat, name: 'You' } : chat);
   }
   listContacts(search = ''): Chat[] {
     const pattern = `%${search.replace(/[\\%_]/g, '\\$&')}%`;
-    return this.db.prepare(`SELECT id,name,0 updated,0 unread,'' preview FROM contacts WHERE id LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 200`).all(pattern, pattern) as Chat[];
+    const self = this.selfAliases(), slots = self.map(() => '?').join(',') || 'NULL';
+    return (this.db.prepare(`SELECT id,name,0 updated,0 unread,'' preview FROM contacts WHERE id LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'
+      OR (id IN (${slots}) AND 'You' LIKE ? ESCAPE '\\') ORDER BY name LIMIT 200`).all(pattern, pattern, ...self, pattern) as Chat[])
+      .map(chat => self.includes(personId(chat.id) || '') ? { ...chat, name: 'You' } : chat);
   }
   displayName(id: string): string | undefined {
     if (personId(id)) return this.personName(id);

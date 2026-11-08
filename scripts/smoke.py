@@ -75,7 +75,7 @@ def run():
         try:
             wait_for(lambda: (folder / "ready").exists(), "Terminal chat list did not become ready")
             assert child.poll() is None, output.decode(errors="replace")
-            assert len(rows("SELECT id FROM chats")) == 3
+            assert len(rows("SELECT id FROM chats")) == 4
             rss = next(line for line in Path(f"/proc/{child.pid}/status").read_text().splitlines() if line.startswith("VmRSS:"))
             send("\r")  # Alex -> composer
             snapshot = "\n".join(snapshot_lines())
@@ -216,7 +216,7 @@ def run():
             send("\r")
             group_snapshot = "\n".join(snapshot_lines())
             assert "Ada (work)" in group_snapshot and "Lin" in group_snapshot
-            assert "@Ada (work)" in group_snapshot and "@Lin" in group_snapshot
+            assert "@Ada (work)" in group_snapshot and "@Lin" in group_snapshot and "@You" in group_snapshot
             assert "@140000001" not in group_snapshot, "Terminal mention was not resolved"
 
             # Terminal QR and generated PNG fallback, then remove on connection.
