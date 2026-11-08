@@ -21,7 +21,7 @@ export class WhatsAppTransport implements Transport {
   private readonly logger = pino({ level: 'silent' });
   private readonly auth;
   constructor(private readonly store: Store, private readonly events: AppEvents, private readonly cache: MediaCache, private readonly createSocket: typeof makeWASocket = makeWASocket) {
-    this.auth = sqliteAuth(store);
+    this.auth = sqliteAuth(store, () => this.events.emit('changed'));
     this.store.setSelf(this.auth.state.creds.me);
   }
   async start(): Promise<void> { this.stopped = false; this.connect(); }
@@ -86,6 +86,7 @@ export class WhatsAppTransport implements Transport {
         this.store.alias(contact.id, contact.phoneNumber);
         this.store.alias(contact.lid, contact.phoneNumber);
         for (const id of [contact.id, contact.lid, contact.phoneNumber]) if (id) {
+          this.store.contact(id, contact.username, -1);
           this.store.contact(id, contact.notify || contact.verifiedName, 0);
           this.store.contact(id, contact.name);
         }
@@ -93,6 +94,7 @@ export class WhatsAppTransport implements Transport {
     };
     on('messaging-history.set', history => {
       this.store.transaction(() => {
+        for (const pair of history.lidPnMappings || []) this.store.alias(pair.lid, pair.pn);
         contacts(history.contacts);
         for (const chat of history.chats) if (chat.id) this.store.chat(chat.id, chat.name, Number(chat.conversationTimestamp || 0), chat.unreadCount, chat.ephemeralExpiration);
         for (const message of history.messages) this.store.put(message);
@@ -100,6 +102,8 @@ export class WhatsAppTransport implements Transport {
       });
       this.events.emit('changed');
     });
+    on('groups.update', groups => { for (const group of groups) contacts(group.participants || []); this.events.emit('changed'); });
+    on('group-participants.update', group => { contacts(group.participants); this.events.emit('changed'); });
     on('lid-mapping.update', mapping => { this.store.alias(mapping.lid, mapping.pn); this.events.emit('changed'); });
     on('contacts.upsert', items => { contacts(items); this.events.emit('changed'); });
     on('contacts.update', items => { contacts(items); this.events.emit('changed'); });

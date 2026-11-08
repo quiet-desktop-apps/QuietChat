@@ -205,10 +205,12 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
 
     group = 'demo-weekend@g.us'
     app.open_chat_id(group)
-    wait(lambda: len(app.messages)==2, 'Group fixture did not load')
-    assert [m['sender'] for m in app.messages] == ['Ada (work)', 'Lin']
+    wait(lambda: len(app.messages)==3, 'Group fixture did not load')
+    assert [m['sender'] for m in app.messages] == ['Ada (work)', 'Lin', 'Unknown participant (…0003)']
     assert '@Ada (work)' in app.messages[1]['text'] and '@Lin' in app.messages[1]['text']
     assert app.messages[1]['senderId']=='140000002@lid'
+    assert app.messages[1]['quote']=='Thanks @You!'
+    assert app.messages[2]['senderId']=='144400003@lid'
     app.composer.get_buffer().set_text('Group draft kept')
     app.copy_conversation()
     assert '@Ada (work)' in clipboard() and '@140000001' not in clipboard()
@@ -217,18 +219,22 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     wait(lambda: app.current['id']=='140000001@lid' and not app.messages, 'Clicking saved sender did not open its direct chat')
     assert app.text()=='' and row_count('Group draft kept')==0
     app.open_chat_id(group)
-    wait(lambda: len(app.messages)==2, 'Returning to group failed')
+    wait(lambda: len(app.messages)==3, 'Returning to group failed')
     assert app.text()=='Group draft kept'
     body = next(w for w in widgets(app.message_boxes['group-profile']) if isinstance(w,Gtk.Label) and 'Hi @Ada' in w.get_text())
     click_label_text(body, '@Lin')
     wait(lambda: app.current['id']=='140000002@lid' and not app.messages, 'Mention click did not open profile-only person')
-    app.open_chat_id(group); wait(lambda: len(app.messages)==2, 'Group reload failed')
+    app.open_chat_id(group); wait(lambda: len(app.messages)==3, 'Group reload failed')
     assert app.text()=='Group draft kept' and row_count('Group draft kept')==0
-    body = next(w for w in widgets(app.message_boxes['group-profile']) if isinstance(w,Gtk.Label) and '@You' in w.get_text())
+    body = next(w for w in widgets(app.message_boxes['group-profile']) if isinstance(w,Gtk.Label) and 'Hi @Ada' in w.get_text() and '@You' in w.get_text())
     click_label_text(body, '@You')
     wait(lambda: app.current['id']=='447700900099@s.whatsapp.net' and app.current['name']=='You', 'Self mention did not open You chat')
     app.open_chat_id('447700900099@s.whatsapp.net')
     wait(lambda: app.current['id']=='447700900099@s.whatsapp.net' and app.current['name']=='You', 'Self chat was not labeled You')
+    app.open_chat_id(group); wait(lambda: len(app.messages)==3, 'Group reload for unknown participant failed')
+    unknown = next(w for w in widgets(app.message_boxes['group-unknown']) if isinstance(w,Gtk.Label) and w.get_text()=='Unknown participant (…0003)')
+    click_label_text(unknown, 'Unknown')
+    wait(lambda: app.current['id']=='144400003@lid' and app.current['name']=='Unknown participant (…0003)', 'Unknown participant lost its direct-chat identity')
     # Profile text remains literal even when it looks like Pango markup.
     from app import markup
     escaped = Gtk.Label()

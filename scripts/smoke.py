@@ -217,6 +217,7 @@ def run():
             group_snapshot = "\n".join(snapshot_lines())
             assert "Ada (work)" in group_snapshot and "Lin" in group_snapshot
             assert "@Ada (work)" in group_snapshot and "@Lin" in group_snapshot and "@You" in group_snapshot
+            assert "Unknown participant" in group_snapshot and "Thanks @You!" in group_snapshot
             assert "@140000001" not in group_snapshot, "Terminal mention was not resolved"
 
             # Terminal QR and generated PNG fallback, then remove on connection.

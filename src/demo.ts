@@ -29,7 +29,9 @@ export class DemoTransport implements Transport {
     this.store.put({ key: { remoteJid: 'demo-weekend@g.us', id: 'group-saved' }, participant: '140000001@lid', pushName: 'Ada', messageTimestamp: time - 310,
       message: { conversation: 'Thanks everyone! Looking forward to Saturday.' } });
     this.store.put({ key: { remoteJid: 'demo-weekend@g.us', id: 'group-profile', participant: '140000002@lid' }, pushName: 'Lin', messageTimestamp: time - 300,
-      message: { extendedTextMessage: { text: 'Hi @140000001 👋\nCan you share the plan with @140000002 and @140000099? https://example.com/weekend', contextInfo: { mentionedJid: ['140000001@lid', '140000002@lid', '140000099@lid'] } } } });
+      message: { extendedTextMessage: { text: 'Hi @140000001 👋\nCan you share the plan with @140000002 and @140000099? https://example.com/weekend', contextInfo: { mentionedJid: ['140000001@lid', '140000002@lid', '140000099@lid'], quotedMessage: { extendedTextMessage: { text: 'Thanks @140000099!', contextInfo: { mentionedJid: ['140000099@lid'] } } } } } } });
+    this.store.put({ key: { remoteJid: 'demo-weekend@g.us', id: 'group-unknown', participant: '144400003@lid' }, messageTimestamp: time - 290,
+      message: { conversation: 'A participant whose name has not arrived yet.' } });
     this.events.emit('connection', { phase: 'online', detail: 'Offline demo · no WhatsApp connection · choose Alex to try it' });
     this.events.emit('changed');
   }

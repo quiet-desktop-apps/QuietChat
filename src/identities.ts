@@ -18,11 +18,37 @@ export function profileName(value?: string | null): string | undefined {
   return name || undefined;
 }
 
+export function messageContext(message: WAMessage['message']) {
+  const content = normalizeMessageContent(message);
+  return content?.extendedTextMessage?.contextInfo || content?.imageMessage?.contextInfo || content?.videoMessage?.contextInfo;
+}
+
+function privateMessage(message: WAMessage['message']): boolean {
+  return !!(message?.ephemeralMessage || message?.viewOnceMessage || message?.viewOnceMessageV2 || message?.viewOnceMessageV2Extension || messageContext(message)?.expiration);
+}
+
+export function quotedPreview(raw: WAMessage, name?: (id: string) => string, original?: WAMessage): string | undefined {
+  const quoted = messageContext(raw.message)?.quotedMessage;
+  if (!quoted) return;
+  if (privateMessage(quoted)) return '[Unavailable message]';
+  const body = normalizeMessageContent(quoted);
+  const text = body?.conversation || body?.extendedTextMessage?.text || body?.imageMessage?.caption || body?.videoMessage?.caption || (body?.imageMessage ? '[Image]' : body?.videoMessage ? '[Video]' : '[Message]');
+  let source: WAMessage = { key: {}, message: quoted };
+  // Some replies omit mention metadata. Reuse it only from the matching retained
+  // original, never guess from arbitrary @numbers or use a different message body.
+  if (!messageContext(quoted)?.mentionedJid?.length && original && !original.ephemeralDuration && !privateMessage(original.message)) {
+    const originalBody = normalizeMessageContent(original.message);
+    const originalText = originalBody?.conversation || originalBody?.extendedTextMessage?.text || originalBody?.imageMessage?.caption || originalBody?.videoMessage?.caption;
+    if (originalText === text) source = original;
+  }
+  const parts = name ? mentionParts(text.slice(0, 200), source, name) : undefined;
+  return (parts ? parts.map(part => part.text).join('') : text).slice(0, 200);
+}
+
 // Only protocol-declared mentions become contact links. Ordinary @numbers,
 // e-mail addresses and numbers inside URLs remain untouched.
 export function mentionParts(text: string, raw: WAMessage | undefined, name: (id: string) => string | undefined): MessagePart[] | undefined {
-  const content = normalizeMessageContent(raw?.message);
-  const context = content?.extendedTextMessage?.contextInfo || content?.imageMessage?.contextInfo || content?.videoMessage?.contextInfo;
+  const context = messageContext(raw?.message);
   const targets = new Map<string, string>();
   for (const value of (context?.mentionedJid || []).slice(0, 100)) {
     const jid = personId(value);
