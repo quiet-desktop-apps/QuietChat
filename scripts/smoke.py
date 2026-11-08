@@ -59,19 +59,26 @@ def run():
             return rows("SELECT count(*) FROM messages WHERE text=?", (text,))[0][0]
 
         def snapshot_lines():
+            snapshot_path = folder / "screen.txt"
+            snapshot_path.unlink(missing_ok=True)
             child.send_signal(signal.SIGHUP)
-            pump()
-            return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", (folder / "screen.txt").read_text()).splitlines()
+            wait_for(lambda: snapshot_path.exists(), "Terminal snapshot was not produced")
+            return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", snapshot_path.read_text()).splitlines()
+
+        def wait_for(condition, description, timeout=15):
+            deadline = time.monotonic() + timeout
+            while not condition():
+                assert child.poll() is None, output.decode(errors="replace")
+                assert time.monotonic() < deadline, description
+                pump(0.05)
 
         try:
-            pump(1)
+            wait_for(lambda: (folder / "ready").exists(), "Terminal chat list did not become ready")
             assert child.poll() is None, output.decode(errors="replace")
             assert len(rows("SELECT id FROM chats")) == 3
             rss = next(line for line in Path(f"/proc/{child.pid}/status").read_text().splitlines() if line.startswith("VmRSS:"))
             send("\r")  # Alex -> composer
-            child.send_signal(signal.SIGHUP)
-            pump()
-            snapshot = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", (folder / "screen.txt").read_text())
+            snapshot = "\n".join(snapshot_lines())
             assert "demo-alex@s.whatsapp.net" not in snapshot, "History still displays a protocol ID instead of the saved name"
             assert "Alex · demo ·" in snapshot, "Saved name missing from message bubbles"
             send("Terminal smoke test")

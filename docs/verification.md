@@ -29,6 +29,13 @@ no real WhatsApp account was accessed or messaged. GitHub CI is also required on
 the combined PR before merging; individual Dependabot checks alone do not prove
 combined compatibility.
 
+The first combined GitHub run exposed a PTY harness startup race: its fixed
+one-second delay could send Enter before the debounced chat list was ready. The
+offline fixture now signals readiness after rendering the populated list; the
+harness waits with a bounded timeout and requests fresh snapshots explicitly.
+The terminal suite was rerun normally and with a deliberate two-second Node
+startup delay to verify the fix without weakening any interaction assertions.
+
 ## Open-source publication preparation — 8 November 2026
 
 Prepared for the independent `quiet-desktop-apps` repository: MIT licensing,
