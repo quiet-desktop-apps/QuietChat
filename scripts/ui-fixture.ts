@@ -53,3 +53,13 @@ if (process.argv.includes('--interaction')) {
     message: { conversation: 'Copy this conversation text\nSecond pasted line' } });
   events.emit('changed');
 }
+
+// A populated database is not sufficient: the debounced chat-list render must
+// finish before the PTY harness sends its first key.
+const markReady = () => {
+  const screen = ui.screen.screenshot(0, Number(ui.screen.width), 0, Number(ui.screen.height));
+  if (!screen.includes('Alex · demo') || !screen.includes('Sam · demo')) return;
+  writeFileSync(join(directory, 'ready'), 'ready\n');
+  ui.screen.removeListener('render', markReady);
+};
+ui.screen.on('render', markReady);

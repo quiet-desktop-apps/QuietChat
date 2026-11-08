@@ -4,6 +4,38 @@ Verified on **7 November 2026**, Linux, Node.js **22.22.2**, with the repository
 locked dependencies. No personal WhatsApp account was linked during development.
 
 
+## Dependabot integration — 8 November 2026 (0.2.8)
+
+Reviewed QuietChat PRs #2–#7 together. Updated SHA-pinned GitHub Actions to
+checkout 7.0.1, setup-node 7.1.0 and upload-artifact 7.0.2, verifying their pins
+against upstream release tags. CI continues to run the app on Node 22 with
+read-only repository permissions and no persisted checkout credentials.
+
+Updated TypeScript to 7.0.2 and the direct Pino dependency to 10.4.0. TypeScript's
+platform-specific compiler packages are development dependencies, not a resident
+UI runtime. Baileys retains its own supported Pino 9 dependency; no override forces
+its transitive dependency to a different major.
+
+Declined the Node 26 declaration upgrade in #6: the app supports Node 22.16+ and
+should type-check against the Node 22 API family. The manifest now explicitly
+starts at @types/node 22.20.5 (already present in the original lockfile), and
+Dependabot ignores major updates for this package until a deliberate runtime
+migration. Node 22 minor/patch updates remain enabled.
+
+Combined verification in an isolated checkout: clean npm install, all 24 core
+checks, terminal PTY and native GTK/D-Bus regressions passed on Node 22.22.2.
+The install audit reported zero known vulnerabilities. These are offline tests;
+no real WhatsApp account was accessed or messaged. GitHub CI is also required on
+the combined PR before merging; individual Dependabot checks alone do not prove
+combined compatibility.
+
+The first combined GitHub run exposed a PTY harness startup race: its fixed
+one-second delay could send Enter before the debounced chat list was ready. The
+offline fixture now signals readiness after rendering the populated list; the
+harness waits with a bounded timeout and requests fresh snapshots explicitly.
+The terminal suite was rerun normally and with a deliberate two-second Node
+startup delay to verify the fix without weakening any interaction assertions.
+
 ## Open-source publication preparation — 8 November 2026
 
 Prepared for the independent `quiet-desktop-apps` repository: MIT licensing,
