@@ -1,7 +1,6 @@
 """QuietChat GTK4 frontend. The existing Node process owns WhatsApp and SQLite."""
 import argparse
 import collections
-import gc
 import json
 import os
 from pathlib import Path
@@ -21,6 +20,7 @@ from bridge import Bridge, ROOT
 from desktop_services import DesktopServices
 from clipboard_images import ClipboardImages
 from input_method import configure_input_method
+from memory import release_unused
 
 APP_ID = 'ch.aboimpinto.QuietChat'
 EMOJIS = ['👍', '❤️', '😂', '😊', '🙏', '🎉', '🔥', '✅', '👋', '😢']
@@ -115,6 +115,9 @@ class QuietChat(Gtk.Application):
         self.asset_running = 0
         self.image_count = 0
         self.asset_epoch = 0
+        self.visibility_epoch = 0
+        self.reclaim_source = None
+        self.qr_path = None
         self.preview_targets = {}
         self.reaction_buttons = {}
         self.pending_chat = None
@@ -280,7 +283,7 @@ class QuietChat(Gtk.Application):
         elif kind == 'incoming':
             if not self.apply_unread(event): return
             message = event['message']
-            if self.current and message['chat'] == self.current['id'] and self.window.is_active() and self.offset == 0:
+            if self.current and message['chat'] == self.current['id'] and self.window.get_visible() and self.window.is_active() and self.offset == 0:
                 self.mark_read(); return
             if self.settings['notifications']:
                 ticket = self.desktop.begin_notification(message['chat'])
@@ -288,8 +291,10 @@ class QuietChat(Gtk.Application):
                 body = (message['sender'] + ':\n' if message['chat'].endswith('@g.us') else '') + message['text']
                 self.bridge.request('avatar', lambda result, error: self.desktop.notify(message['chat'], title, body, result.get('path') if result else None, ticket=ticket), chat=event.get('avatar_id',message['chat']))
         elif kind == 'qr':
-            if event.get('path'):
-                self.qr_picture.set_filename(event['path']); self.content_stack.set_visible_child_name('qr')
+            self.qr_path = event.get('path')
+            if self.qr_path:
+                if self.window.get_visible(): self.qr_picture.set_filename(self.qr_path)
+                self.content_stack.set_visible_child_name('qr')
             else:
                 self.qr_picture.set_paintable(None); self.content_stack.set_visible_child_name('messages' if self.current else 'empty')
         elif kind in ('notice','fatal'):
@@ -338,6 +343,7 @@ class QuietChat(Gtk.Application):
         self.chat_fingerprint = None; self.refresh_chats()
 
     def queue_refresh(self):
+        if not self.window.get_visible(): return
         if not self.refresh_source: self.refresh_source = GLib.timeout_add(150, self.refresh_now)
 
     def refresh_now(self):
@@ -347,9 +353,11 @@ class QuietChat(Gtk.Application):
         return GLib.SOURCE_REMOVE
 
     def refresh_chats(self):
-        if not self.ready: return
+        if not self.ready or not self.window.get_visible(): return
+        epoch = self.visibility_epoch
         search, contacts = self.search.get_text(), self.contacts
         def complete(result, error):
+            if epoch != self.visibility_epoch or not self.window.get_visible(): return
             if error: self.notice(error, True); return
             if search != self.search.get_text() or contacts != self.contacts: return
             if not self.apply_unread(result): return
@@ -385,7 +393,7 @@ class QuietChat(Gtk.Application):
         self.bridge.request('chats', complete, search=search, contacts=contacts)
 
     def schedule_chat_avatars(self, *_args):
-        if not self.quitting:
+        if not self.quitting and self.window.get_visible():
             if self.avatar_source: GLib.source_remove(self.avatar_source)
             # Coalesce scroll/layout changes; never request the whole contact book.
             self.avatar_source = GLib.timeout_add(100, self.load_chat_avatars)
@@ -418,6 +426,9 @@ class QuietChat(Gtk.Application):
             texture = cached[1] if cached and cached[0] > now and visible else None
             row.avatar_image.set_paintable(texture)
             row.avatar_stack.set_visible_child_name('photo' if texture else 'initial')
+            if not visible and cached and cached[1] is not None:
+                self.chat_avatars.pop(chat, None)
+                self.schedule_reclaim()
             if visible:
                 if cached and cached[0] > now: self.chat_avatars.move_to_end(chat)
                 else: missing.append(chat)
@@ -427,7 +438,7 @@ class QuietChat(Gtk.Application):
             def complete(result, error):
                 if self.avatar_request is not token: return
                 self.avatar_request = None
-                if self.quitting: return
+                if self.quitting or not self.window.get_visible(): return
                 self.cache_chat_avatar(chat, result, error)
                 self.schedule_chat_avatars()
             self.bridge.request('avatar', complete, chat=chat)
@@ -459,6 +470,10 @@ class QuietChat(Gtk.Application):
         self.release_messages(); self.title.set_text(chat['name']); self.update_controls()
         self.content_stack.set_visible_child_name('messages')
         self.refresh_messages(follow=True)
+        self.load_header_avatar(chat)
+        self.composer.grab_focus(); self.mark_read()
+
+    def load_header_avatar(self, chat):
         self.avatar.set_from_icon_name('avatar-default-symbolic')
         generation = self.generation
         def avatar_done(result, _error):
@@ -467,7 +482,6 @@ class QuietChat(Gtk.Application):
                 if texture: self.avatar.set_from_paintable(texture)
                 self.schedule_chat_avatars()
         self.bridge.request('avatar', avatar_done, chat=chat['id'])
-        self.composer.grab_focus(); self.mark_read()
 
     def release_messages(self):
         focus = self.window.get_focus()
@@ -480,13 +494,24 @@ class QuietChat(Gtk.Application):
         self.message_boxes.clear()
         clear_box(self.message_list)
         self.messages = []; self.image_count = 0
-        gc.collect()
+        self.schedule_reclaim()
+
+    def schedule_reclaim(self):
+        if self.quitting: return
+        if self.reclaim_source: GLib.source_remove(self.reclaim_source)
+        # One cleanup after a burst of navigation, not a periodic GC loop.
+        self.reclaim_source = GLib.timeout_add(1500, self.reclaim_unused)
+
+    def reclaim_unused(self):
+        self.reclaim_source = None
+        if not self.quitting: release_unused()
+        return GLib.SOURCE_REMOVE
 
     def refresh_messages(self, follow=False):
-        if not self.ready or not self.current: return
+        if not self.ready or not self.current or not self.window.get_visible(): return
         chat, offset, generation = self.current['id'], self.offset, self.generation
         def complete(result, error):
-            if generation != self.generation or not self.current or chat != self.current['id'] or offset != self.offset: return
+            if generation != self.generation or not self.window.get_visible() or not self.current or chat != self.current['id'] or offset != self.offset: return
             if error: self.notice(error, True); return
             if offset and not result['messages']:
                 self.offset = max(0,offset-60); self.refresh_messages(); return
@@ -595,6 +620,7 @@ class QuietChat(Gtk.Application):
                     except GLib.Error: pass
                 elif error and not automatic: self.notice(error, True)
             self.pump_assets()
+            if not self.window.get_visible(): self.schedule_reclaim()
         self.bridge.request('thumbnail', complete, chat=message['chat'], message=message['id'], download=download)
 
     def load_url_preview(self, mid, url):
@@ -860,7 +886,7 @@ class QuietChat(Gtk.Application):
         if self.attachment:
             title = 'Clipboard image' if self.attachment.get('clipboard') else Path(self.attachment['path']).name
             self.attachment_label.set_text(title + f" · {self.attachment['size']/1048576:.1f} MiB")
-        path = self.attachment['path'] if self.attachment and self.attachment.get('clipboard') else None
+        path = self.attachment['path'] if self.window.get_visible() and self.attachment and self.attachment.get('clipboard') else None
         if path != self.attachment_thumbnail_path:
             self.attachment_thumbnail_path = path
             self.attachment_thumbnail.set_paintable(None); self.attachment_thumbnail.set_visible(False)
@@ -889,10 +915,15 @@ class QuietChat(Gtk.Application):
     def show_chat(self, chat):
         if not self.window: self.activate(); return
         was_hidden = not self.window.get_visible(); self.window.present()
+        if was_hidden:
+            self.refresh_chats(); self.schedule_chat_avatars(); self.update_controls()
+            if self.qr_path: self.qr_picture.set_filename(self.qr_path)
         if chat:
             if self.ready: self.open_chat_id(chat)
             else: self.pending_chat = chat
-        elif was_hidden and self.current: self.message_fingerprint = None; self.refresh_messages(follow=True)
+        elif was_hidden and self.current:
+            self.message_fingerprint = None; self.refresh_messages(follow=True)
+            self.load_header_avatar(self.current)
         self.mark_read()
 
     def hide_when_ready(self):
@@ -900,10 +931,19 @@ class QuietChat(Gtk.Application):
         return GLib.SOURCE_REMOVE
 
     def hide_window(self):
-        self.cancel_clipboard_paste(); self.update_controls()
-        self.save_draft(); self.window.set_visible(False); self.generation += 1
-        self.release_messages(); self.message_fingerprint = None
+        self.cancel_clipboard_paste(); self.save_draft()
+        self.window.set_visible(False); self.generation += 1; self.visibility_epoch += 1
+        for name in ('avatar_source', 'refresh_source', 'search_source'):
+            source = getattr(self, name)
+            if source: GLib.source_remove(source); setattr(self, name, None)
+        self.avatar_request = None
+        self.release_messages(); self.message_fingerprint = self.chat_fingerprint = None
+        for row in self.chat_rows.values(): row.avatar_image.set_paintable(None)
+        clear_box(self.chat_list); self.chat_rows.clear(); self.chat_avatars.clear()
         self.avatar.set_from_icon_name('avatar-default-symbolic')
+        self.qr_picture.set_paintable(None)
+        self.update_controls()
+        self.schedule_reclaim()
 
     def close_requested(self, _window):
         if self.settings['background'] and self.desktop.available:
@@ -920,6 +960,7 @@ class QuietChat(Gtk.Application):
     def shutdown(self):
         if self.quitting: return
         self.quitting = True
+        if self.reclaim_source: GLib.source_remove(self.reclaim_source); self.reclaim_source = None
         if self.avatar_source: GLib.source_remove(self.avatar_source); self.avatar_source = None
         if self.desktop: self.desktop.close()
         if self.bridge: self.bridge.close()

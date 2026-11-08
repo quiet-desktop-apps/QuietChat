@@ -58,3 +58,42 @@ startup, steady idle, active use, media playback and tray separately. Preserve
 sanitized numeric samples; do not publish process command lines containing private
 URLs or credentials. We welcome reproducible improvements over these initial
 observations.
+
+## Hidden UI cache cleanup — 8 November 2026 (0.2.10)
+
+A same-workload offline probe compared the old UI with the new cleanup after ten
+chat round trips. It used a fresh Xvfb/D-Bus session per run, three synthetic chats
+and two media messages. It did not connect an account or restart the owner's app.
+
+| Tray measurement, three seconds after hiding | Before | After |
+|---|---:|---:|
+| GTK RSS | 191.60 MiB | 187.06 MiB |
+| Backend RSS | 102.70 MiB | 102.40 MiB |
+| Combined RSS | 294.30 MiB | 289.46 MiB |
+| Retained sidebar rows / decoded avatar entries | 3 / 3 | 0 / 0 |
+
+This small fixture recovered about 4.5 MiB in GTK, not the whole 30 MiB overnight
+increase reported in live use. Backend variation is not attributed to the UI fix.
+See the [numeric samples](cache-memory-2026-11-08.json); they include warm, switched
+and reopened phases plus PSS. Shared-library attribution varies between runs.
+The live ~300 MiB session was left running and was not used for this comparison.
+
+Hidden windows now release sidebar widgets, decoded avatars, message widgets and
+preview textures, including the attachment thumbnail (its draft file is kept).
+Late display requests cannot recreate them while hidden; tray counters and popup
+notifications continue. Scrolling drops offscreen avatar textures. The existing
+16 MiB/200-file preview disk cache remains available for rebuilding the view.
+
+After navigation or hiding settles, a single deferred cleanup collects Python
+cycles and, where glibc provides it, calls `malloc_trim(0)` to request return of
+unused native heap pages. Other platforms use object cleanup alone. This is not
+a periodic forced-GC loop and does not discard live objects or restart the backend.
+The GTK/Node runtimes, connection and drafts still need memory; there is no fixed
+RSS target or guarantee that every freed object immediately lowers RSS.
+
+Reproduce the synthetic probe with:
+
+```bash
+GDK_BACKEND=x11 xvfb-run -a -s '-screen 0 1400x1000x24' \
+  dbus-run-session -- /usr/bin/python3 scripts/cache-memory.py
+```

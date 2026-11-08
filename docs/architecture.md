@@ -40,8 +40,13 @@ not imply recipient delivery or read receipts.
 ## Resource lifetime
 
 Only one 60-message page owns GTK message widgets. Changing chats or hiding to the
-tray destroys that page's widgets and decoded images. Sidebar queries return up to
-200 chats; only visible avatars are requested, with 64 tiny decoded photos cached.
+tray destroys that page's widgets and decoded images. Hiding also releases sidebar
+widgets, decoded avatars and attachment thumbnails, retaining their disk files
+and drafts. Visibility epochs reject late display responses; hidden notifications
+do not rebuild the UI. A coalesced cleanup collects cycles and optionally returns
+unused native heap pages through glibc after navigation settles. Sidebar queries return up to
+200 chats; only visible avatars are requested. Decoded offscreen photos are
+evicted; unavailable-photo metadata remains bounded to 64 entries.
 Thumbnails are bounded to 12 automatic previews per page and two workers. Backend
 history retains up to 10,000 messages. Preview disk cache is 200 files / 16 MiB;
 media disk cache is 256 MiB, with 100 MiB per attachment. Clipboard drafts have
