@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { proto, normalizeMessageContent, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
 import { isChatJid, type Chat, type Message, type ReplyTarget } from './model.js';
-import { mentionParts, personId, profileName, senderId } from './identities.js';
+import { mentionParts, personId, profileName, senderId, quotedPreview, messageContext } from './identities.js';
 
 type Row = { chat: string; id: string; sender: string; mine: number; time: number; text: string; kind: Message['kind']; reactions: string; quote: string | null };
 export const HISTORY_LIMIT = 10_000;
@@ -18,11 +18,7 @@ export function describeMessage(raw: WAMessage): Omit<Message, 'reactions'> | un
   const privateMedia = envelope.viewOnceMessage || envelope.viewOnceMessageV2 || envelope.viewOnceMessageV2Extension;
   const expires = envelope.ephemeralMessage || raw.ephemeralDuration || content.extendedTextMessage?.contextInfo?.expiration || content.imageMessage?.contextInfo?.expiration || content.videoMessage?.contextInfo?.expiration;
   if (privateMedia || expires) return { ...base, text: '[View this disappearing/view-once message on your phone]', kind: 'unsupported' };
-  const context = content.extendedTextMessage?.contextInfo || content.imageMessage?.contextInfo || content.videoMessage?.contextInfo;
-  const quoted = context?.quotedMessage;
-  const quotedBody = normalizeMessageContent(quoted);
-  const privateQuote = quoted?.ephemeralMessage || quoted?.viewOnceMessage || quoted?.viewOnceMessageV2 || quoted?.viewOnceMessageV2Extension;
-  const quote = quoted ? (privateQuote ? '[Unavailable message]' : quotedBody?.conversation || quotedBody?.extendedTextMessage?.text || quotedBody?.imageMessage?.caption || quotedBody?.videoMessage?.caption || (quotedBody?.imageMessage ? '[Image]' : quotedBody?.videoMessage ? '[Video]' : '[Message]')).slice(0, 200) : undefined;
+  const quote = quotedPreview(raw);
   const visible = { ...base, quote };
   if (content.imageMessage) return { ...visible, text: content.imageMessage.caption || '[Image]', kind: 'image', raw };
   if (content.videoMessage) return { ...visible, text: content.videoMessage.caption || '[Video]', kind: 'video', raw };
@@ -33,6 +29,7 @@ export function describeMessage(raw: WAMessage): Omit<Message, 'reactions'> | un
 
 export class Store {
   readonly db: DatabaseSync;
+  private selfIds: string[] = [];
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;
@@ -70,16 +67,27 @@ export class Store {
   }
   contact(id: string, name?: string | null, source = 2): void {
     const person = personId(id), clean = profileName(name);
-    if (!person || !clean) return;
+    if (!person || !clean || isChatJid(clean)) return;
     this.db.prepare(`INSERT INTO contacts(id,name,source) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE
       SET name=excluded.name,source=excluded.source WHERE excluded.source>=contacts.source`).run(person, clean, source);
   }
-  alias(first?: string | null, second?: string | null): void {
+  alias(first?: string | null, second?: string | null): boolean {
     const a = personId(first), b = personId(second);
-    if (!a || !b || a === b || a.split('@')[1] === b.split('@')[1]) return;
+    if (!a || !b || a === b || a.split('@')[1] === b.split('@')[1]) return false;
     const [lid, pn] = a.endsWith('@lid') ? [a,b] : [b,a];
-    this.db.prepare('INSERT INTO person_aliases VALUES (?,?) ON CONFLICT(lid) DO UPDATE SET pn=excluded.pn').run(lid,pn);
+    return !!this.db.prepare('INSERT INTO person_aliases VALUES (?,?) ON CONFLICT(lid) DO UPDATE SET pn=excluded.pn WHERE pn<>excluded.pn').run(lid,pn).changes;
   }
+  // Account identity is a display overlay, never a replacement for saved names.
+  // Keep only the current account's two IDs; aliases stay in the existing index.
+  setSelf(me?: { id?: string; lid?: string }): boolean {
+    const ids = [...new Set([personId(me?.id), personId(me?.lid)].filter((id): id is string => !!id))];
+    if (ids.join('|') === this.selfIds.join('|')) return false;
+    this.alias(me?.id, me?.lid);
+    this.selfIds = ids;
+    return true;
+  }
+  private selfAliases(): string[] { return [...new Set(this.selfIds.flatMap(id => this.personIds(id)))]; }
+  private isSelf(id: string): boolean { return this.selfIds.length > 0 && this.personIds(id).some(alias => this.selfIds.includes(alias)); }
   private personIds(id: string): string[] {
     const person = personId(id);
     if (!person) return [];
@@ -93,13 +101,22 @@ export class Store {
     return aliases;
   }
   personName(id: string): string | undefined {
+    if (this.isSelf(id)) return 'You';
     const aliases = this.personIds(id), person = aliases[0];
     if (!person) return;
     const slots = aliases.map(() => '?').join(',');
-    const row = this.db.prepare(`SELECT name FROM contacts WHERE id IN (${slots}) ORDER BY source DESC, id=? DESC LIMIT 1`).get(...aliases, person);
-    if (typeof row?.name === 'string') return row.name;
-    const chat = this.db.prepare(`SELECT name FROM chats WHERE id IN (${slots}) AND name<>'' ORDER BY id=? DESC LIMIT 1`).get(...aliases,person);
-    return typeof chat?.name === 'string' ? chat.name : undefined;
+    const row = this.db.prepare(`SELECT name FROM contacts WHERE id IN (${slots}) AND name NOT GLOB '*@lid' AND name NOT GLOB '*@s.whatsapp.net' ORDER BY source DESC, id=? DESC LIMIT 1`).get(...aliases, person);
+    if (typeof row?.name === 'string' && !isChatJid(row.name)) return row.name;
+    const chat = this.db.prepare(`SELECT name FROM chats WHERE id IN (${slots}) AND name<>'' AND name NOT GLOB '*@lid' AND name NOT GLOB '*@s.whatsapp.net' ORDER BY id=? DESC LIMIT 1`).get(...aliases,person);
+    return typeof chat?.name === 'string' && !isChatJid(chat.name) ? chat.name : undefined;
+  }
+  personLabel(id: string): string {
+    const name = this.personName(id);
+    if (name) return name;
+    const ids = this.personIds(id), phone = ids.find(jid => jid.endsWith('@s.whatsapp.net'));
+    if (phone && /^\d+@/.test(phone)) return '+' + phone.split('@')[0];
+    const person = ids[0];
+    return person ? `Unknown participant (…${person.split('@')[0].slice(-4)})` : 'Unknown participant';
   }
   directChat(id: string): Chat {
     const aliases = this.personIds(id), person = aliases[0];
@@ -107,7 +124,7 @@ export class Store {
     const slots = aliases.map(() => '?').join(',');
     const existing = this.db.prepare(`SELECT id,updated,unread FROM chats WHERE id IN (${slots}) ORDER BY id=? DESC,updated DESC LIMIT 1`).get(...aliases, person);
     const target = existing ? String(existing.id) : person;
-    return { id: target, name: this.personName(person) || target, updated: Number(existing?.updated || 0), unread: Number(existing?.unread || 0), preview: '' };
+    return { id: target, name: this.personLabel(person), updated: Number(existing?.updated || 0), unread: Number(existing?.unread || 0), preview: '' };
   }
   private rememberPerson(raw: WAMessage): void {
     const id = senderId(raw);
@@ -124,9 +141,9 @@ export class Store {
   }
   expiration(id: string): number { return Number(this.db.prepare('SELECT expiration FROM chats WHERE id=?').get(id)?.expiration || 0); }
   put(raw: WAMessage, notify = false): boolean {
+    this.rememberPerson(raw);
     let message = describeMessage(raw);
     if (!message) return false;
-    this.rememberPerson(raw);
     if (this.expiration(message.chat) > 0) message = { ...message, text: '[View this disappearing message on your phone]', kind: 'unsupported', raw: undefined };
     this.chat(message.chat, undefined, message.time);
     const result = this.db.prepare(`INSERT INTO messages(chat,id,sender,mine,time,text,kind,raw,quote) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(chat,id) DO NOTHING`)
@@ -150,17 +167,25 @@ export class Store {
   clearMessages(id: string): void { this.db.prepare('DELETE FROM messages WHERE chat=?').run(id); }
   listChats(search = ''): Chat[] {
     const pattern = `%${search.replace(/[\\%_]/g, '\\$&')}%`;
-    return this.db.prepare(`SELECT c.id, coalesce(nullif(c.name,''),p.name,c.id) name, c.updated,c.unread,
+    const self = this.selfAliases(), slots = self.map(() => '?').join(',') || 'NULL';
+    return (this.db.prepare(`SELECT c.id, coalesce(nullif(c.name,''),p.name,c.id) name, c.updated,c.unread,
       coalesce((SELECT substr(text,1,140) FROM messages m WHERE m.chat=c.id ORDER BY time DESC,id DESC LIMIT 1),'') preview
       FROM chats c LEFT JOIN contacts p ON p.id=c.id WHERE c.id LIKE ? ESCAPE '\\' OR coalesce(nullif(c.name,''),p.name,c.id) LIKE ? ESCAPE '\\'
-      ORDER BY c.updated DESC,c.id LIMIT 200`).all(pattern, pattern) as Chat[];
+      OR (c.id IN (${slots}) AND 'You' LIKE ? ESCAPE '\\')
+      ORDER BY c.updated DESC,c.id LIMIT 200`).all(pattern, pattern, ...self, pattern) as Chat[])
+      .map(chat => self.includes(personId(chat.id) || '') ? { ...chat, name: 'You' }
+        : personId(chat.name) ? { ...chat, name: this.personLabel(chat.id) } : chat);
   }
   listContacts(search = ''): Chat[] {
     const pattern = `%${search.replace(/[\\%_]/g, '\\$&')}%`;
-    return this.db.prepare(`SELECT id,name,0 updated,0 unread,'' preview FROM contacts WHERE id LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 200`).all(pattern, pattern) as Chat[];
+    const self = this.selfAliases(), slots = self.map(() => '?').join(',') || 'NULL';
+    return (this.db.prepare(`SELECT id,name,0 updated,0 unread,'' preview FROM contacts WHERE id LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'
+      OR (id IN (${slots}) AND 'You' LIKE ? ESCAPE '\\') ORDER BY name LIMIT 200`).all(pattern, pattern, ...self, pattern) as Chat[])
+      .map(chat => self.includes(personId(chat.id) || '') ? { ...chat, name: 'You' }
+        : personId(chat.name) ? { ...chat, name: this.personLabel(chat.id) } : chat);
   }
   displayName(id: string): string | undefined {
-    if (personId(id)) return this.personName(id);
+    if (personId(id)) return this.personLabel(id);
     if (!isChatJid(id)) return;
     const row = this.db.prepare("SELECT nullif(name,'') name FROM chats WHERE id=?").get(id);
     return typeof row?.name === 'string' ? row.name : undefined;
@@ -170,11 +195,15 @@ export class Store {
     const group = row.chat.endsWith('@g.us');
     const id = raw ? senderId(raw) : personId(group ? row.sender : row.chat);
     // Old rows may contain the group JID as sender. Never resolve that to a title.
-    const fallback = profileName(raw?.pushName) || (!isChatJid(row.sender) ? row.sender : undefined);
-    const sender = (id && this.personName(id)) || fallback || id || 'Unknown participant';
-    const parts = mentionParts(row.text, raw, jid => this.personName(jid));
+    const pushName = profileName(raw?.pushName);
+    const fallback = (pushName && !isChatJid(pushName) ? pushName : undefined) || (!isChatJid(row.sender) ? row.sender : undefined);
+    const sender = (id && this.personName(id)) || fallback || (id ? this.personLabel(id) : 'Unknown participant');
+    const parts = mentionParts(row.text, raw, jid => this.personLabel(jid));
+    const context = messageContext(raw?.message);
+    const original = context?.quotedMessage && context.stanzaId ? this.raw({ remoteJid: context.remoteJid || row.chat, id: context.stanzaId }) : undefined;
+    const quote = raw ? quotedPreview(raw, jid => this.personLabel(jid), original) : undefined;
     return { ...row, sender, senderId: row.mine ? undefined : id, mine: !!row.mine,
-      text: parts ? parts.map(part => part.text).join('') : row.text, parts, quote: row.quote ?? undefined };
+      text: parts ? parts.map(part => part.text).join('') : row.text, parts, quote: quote ?? row.quote ?? undefined };
   }
   messages(chat: string, offset = 0): Message[] {
     // Resolve names at read time so retained history benefits from later sync.

@@ -129,7 +129,7 @@ test('old direct-chat messages resolve the saved name without rewriting protocol
   const store = new Store(':memory:');
   try {
     store.put({ ...message('history'), pushName: undefined });
-    assert.equal(store.messages(chat)[0].sender, chat);
+    assert.equal(store.messages(chat)[0].sender, '+123');
     store.contact(chat, 'Saved contact');
     assert.equal(store.messages(chat)[0].sender, 'Saved contact');
     store.contact(chat, 'Renamed contact');
@@ -159,7 +159,7 @@ test('history participants and profile names resolve without ever attributing me
     store.chat(group, 'Group title');
     store.put({ key: { remoteJid: group, id: 'old' }, participant: person, message: { conversation: 'Old history' } });
     assert.equal(store.message(group, 'old')?.senderId, person);
-    assert.equal(store.message(group, 'old')?.sender, person);
+    assert.equal(store.message(group, 'old')?.sender, 'Unknown participant (…456)');
     store.put({ key: { remoteJid: group, id: 'new', participant: person }, pushName: 'Profile name', message: { conversation: 'New arrival' } });
     assert.equal(store.message(group, 'old')?.sender, 'Profile name');
     store.contact('447700900001@s.whatsapp.net', 'Saved friend');
@@ -186,7 +186,7 @@ test('declared mentions resolve contacts and profiles, preserve protocol text, a
       message: { extendedTextMessage: { text, contextInfo: { mentionedJid: [person, '456@lid', '789@lid'] } } } };
     store.put(raw);
     const view = store.message(group, 'mention')!;
-    assert.equal(view.text, '👋 @José & Ana <friends>, meet @Lin and @789. Again @José & Ana <friends>! Plain @999, x@1400123, @14001230, https://example.test/@1400123');
+    assert.equal(view.text, '👋 @José & Ana <friends>, meet @Lin and @Unknown participant (…789). Again @José & Ana <friends>! Plain @999, x@1400123, @14001230, https://example.test/@1400123');
     assert.deepEqual(view.parts?.filter(part => part.jid).map(part => part.jid), [person, '456@lid', '789@lid', person]);
     assert.equal(view.parts?.map(part => part.text).join(''), view.text);
     assert.equal(store.raw(raw.key)?.message?.extendedTextMessage?.text, text);
@@ -220,6 +220,147 @@ test('contact sync preserves saved names and maps LID/phone identities, includin
     assert.equal(store.message('test@g.us', 'alt')?.sender, 'Alternate identity');
     assert.equal(store.message('test@g.us', 'alt')?.senderId, '600@lid');
   } finally { adapter.stop(); store.close(); }
+});
+
+test('account identity labels self chats and mentions without changing contacts, raw text or routing', () => {
+  const store = new Store(':memory:'), pn = '447700900099@s.whatsapp.net', lid = '140000099@lid', group = 'self-test@g.us';
+  try {
+    store.contact(pn, 'Saved account name'); store.chat(pn, 'Old phone label');
+    store.contact(lid, 'Profile name', 0); store.chat(lid);
+    store.chat(group, 'Group title');
+    const raw: WAMessage = { key: { remoteJid: group, id: 'self-mention', participant: '123@lid' },
+      message: { extendedTextMessage: { text: '@140000099 and @447700900099', contextInfo: { mentionedJid: [lid, pn] } } } };
+    store.put(raw);
+    assert.equal(store.setSelf({ id: '447700900099:8@s.whatsapp.net' }), true);
+    assert.equal(store.displayName(pn), 'You');
+    assert.notEqual(store.displayName(lid), 'You', 'Unmapped IDs cannot be guessed');
+    store.alias(lid, pn); // Mapping may arrive after account identity/history.
+    assert.equal(store.displayName(lid), 'You');
+    assert.equal(store.personName('447700900099:2@s.whatsapp.net'), 'You');
+    for (const list of [store.listChats(), store.listContacts(), store.listChats('you'), store.listContacts('YOU')]) {
+      assert.equal(list.filter(c => c.name === 'You').length, 2);
+    }
+    assert.equal(store.listChats('900099').filter(c => c.name === 'You').length, 1);
+    assert.equal(store.displayName(group), 'Group title');
+    assert.equal(store.personName('447700900098@s.whatsapp.net'), undefined);
+    const view = store.message(group, 'self-mention')!;
+    assert.equal(view.text, '@You and @You');
+    assert.deepEqual(view.parts?.filter(p => p.jid).map(p => p.jid), [lid, pn]);
+    assert.equal(store.raw(raw.key)?.message?.extendedTextMessage?.text, '@140000099 and @447700900099');
+    assert.equal(store.directChat(lid).id, lid); assert.equal(store.directChat(pn).name, 'You');
+    assert.equal(store.setSelf({ id: pn }), false, 'Device suffixes do not change identity');
+    store.setSelf({ id: 'other@s.whatsapp.net', lid: '999@lid' });
+    assert.equal(store.personName(pn), 'Saved account name', 'Account changes must remove the old overlay');
+    store.setSelf(); assert.equal(store.personName('999@lid'), undefined);
+  } finally { store.close(); }
+});
+
+test('saved login and pairing identity updates supply self labels to the shared store', async () => {
+  const store = new Store(':memory:'), events = new AppEvents(), ev = new EventEmitter();
+  const auth = sqliteAuth(store), pn = '447700900099@s.whatsapp.net', lid = '140000099@lid';
+  auth.state.creds.me = { id: '447700900099:7@s.whatsapp.net', name: 'Profile' }; auth.save();
+  let options: Partial<SocketConfig> | undefined, changes = 0;
+  events.on('changed', () => { changes++; });
+  const adapter = new WhatsAppTransport(store, events, new MediaCache('/unused'), config => {
+    options = config; return { ev, end() {} } as unknown as WASocket;
+  });
+  try {
+    assert.equal(store.displayName(pn), 'You', 'Saved identity works before connecting');
+    await adapter.start();
+    const me = { ...options!.auth!.creds.me!, lid: '140000099:3@lid' };
+    Object.assign(options!.auth!.creds, { me }); ev.emit('creds.update', { me });
+    assert.equal(store.displayName(lid), 'You'); assert.equal(changes, 1);
+    ev.emit('creds.update', {}); assert.equal(changes, 1, 'Key saves do not trigger display refreshes');
+    ev.emit('connection.update', { connection: 'open' }); assert.equal(store.displayName(lid), 'You');
+    assert.equal(sqliteAuth(store).state.creds.me?.lid, me.lid);
+    adapter.stop(); ev.emit('creds.update', { me: { id: 'other@s.whatsapp.net' } });
+    assert.equal(store.displayName(pn), 'You', 'Stopped socket events cannot replace account identity');
+  } finally { adapter.stop(); store.close(); }
+});
+
+test('history mapping batches and group participant updates recover names for old LID messages', async () => {
+  const store = new Store(':memory:'), events = new AppEvents(), ev = new EventEmitter();
+  const adapter = new WhatsAppTransport(store, events, new MediaCache('/unused'), () => ({ ev, end() {} }) as unknown as WASocket);
+  const group = 'mapping-test@g.us', lid = '144400001@lid', phone = '447700900001@s.whatsapp.net';
+  try {
+    store.put({ key: { remoteJid: group, id: 'old', participant: lid }, message: { conversation: 'Earlier' } });
+    await adapter.start();
+    ev.emit('messaging-history.set', { chats: [], contacts: [{ id: phone, name: 'Saved friend' }], messages: [], lidPnMappings: [{ lid, pn: phone }] });
+    assert.equal(store.message(group, 'old')?.sender, 'Saved friend');
+    ev.emit('group-participants.update', { id: group, participants: [{ id: '144400002@lid', phoneNumber: phone }], action: 'add' });
+    assert.equal(store.personName('144400002@lid'), 'Saved friend');
+    ev.emit('groups.update', [{ id: group, participants: [{ id: '144400003@lid', username: 'profile_handle' }] }]);
+    assert.equal(store.personName('144400003@lid'), 'profile_handle');
+    ev.emit('contacts.update', [{ id: '144400003@lid', notify: 'Full profile name' }]);
+    ev.emit('groups.update', [{ id: group, participants: [{ id: '144400003@lid', username: 'new_handle' }] }]);
+    assert.equal(store.personName('144400003@lid'), 'Full profile name');
+    // Identity-bearing protocol stubs can supply a name without a visible message.
+    assert.equal(store.put({ key: { remoteJid: group, id: 'stub', participant: '144400004@lid' }, pushName: 'Profile from stub' }), false);
+    assert.equal(store.personName('144400004@lid'), 'Profile from stub');
+    assert.equal(store.messages(group).length, 1);
+  } finally { adapter.stop(); store.close(); }
+});
+
+test('saved protocol mappings recover names on startup and new mapping writes refresh display without rewriting auth', async () => {
+  const store = new Store(':memory:'), phone = '447700900001@s.whatsapp.net';
+  try {
+    store.contact(phone, 'Saved friend');
+    const put = store.db.prepare('INSERT INTO auth VALUES (?,?,?)');
+    put.run('lid-mapping', '144400001_reverse', JSON.stringify('447700900001'));
+    put.run('lid-mapping', '144400002_reverse', JSON.stringify({ invalid: true }));
+    put.run('lid-mapping', '144400003_reverse', 'invalid-json');
+    const before = store.db.prepare('SELECT * FROM auth ORDER BY id').all();
+    let changed = 0;
+    const auth = sqliteAuth(store, () => { changed++; });
+    assert.equal(store.personName('144400001@lid'), 'Saved friend');
+    assert.equal(store.personName('144400002@lid'), undefined);
+    assert.deepEqual(store.db.prepare('SELECT * FROM auth ORDER BY id').all(), before);
+    await auth.state.keys.set({ 'lid-mapping': { '144400005_reverse': '447700900001', '447700900001': '144400005' } });
+    assert.equal(store.personName('144400005@lid'), 'Saved friend'); assert.equal(changed, 1);
+    await auth.state.keys.set({ 'lid-mapping': { '144400005_reverse': '447700900001' } });
+    assert.equal(changed, 1, 'Repeated mapping writes must not trigger redraws');
+    assert.equal(store.directChat('144400005@lid').id, '144400005@lid');
+  } finally { store.close(); }
+});
+
+test('unresolved participants have readable clickable labels and upgrade when a name arrives', () => {
+  const store = new Store(':memory:'), lid = '144400001@lid', group = 'fallback@g.us';
+  try {
+    store.put({ key: { remoteJid: group, id: 'unknown', participant: lid }, message: { conversation: 'Hello' } });
+    assert.equal(store.message(group, 'unknown')?.sender, 'Unknown participant (…0001)');
+    assert.equal(store.message(group, 'unknown')?.senderId, lid);
+    assert.equal(store.directChat(lid).name, 'Unknown participant (…0001)');
+    store.chat(lid); assert.equal(store.listChats().find(c => c.id === lid)?.name, 'Unknown participant (…0001)');
+    store.alias(lid, '447700900001@s.whatsapp.net');
+    assert.equal(store.personLabel(lid), '+447700900001', 'A verified phone mapping is not presented as a LID');
+    store.contact(lid, 'Later profile', 0);
+    assert.equal(store.message(group, 'unknown')?.sender, 'Later profile');
+    assert.equal(store.displayName(lid), 'Later profile');
+  } finally { store.close(); }
+});
+
+test('quoted mentions resolve declared targets or matching retained originals without changing reply data', () => {
+  const store = new Store(':memory:'), group = 'quote-names@g.us', person = '144400001@lid';
+  try {
+    store.contact(person, 'Alex');
+    const original: WAMessage = { key: { remoteJid: group, id: 'original', participant: person },
+      message: { extendedTextMessage: { text: 'Hello @144400001 and plain @777 https://example.test/@144400001', contextInfo: { mentionedJid: [person] } } } };
+    store.put(original);
+    const text = original.message!.extendedTextMessage!.text!;
+    const reply = (id: string, quotedMessage: WAMessage['message'], stanzaId = 'original'): WAMessage => ({ key: { remoteJid: group, id }, message: { extendedTextMessage: { text: 'Reply', contextInfo: { stanzaId, quotedMessage } } } });
+    store.put(reply('nested', original.message));
+    store.put(reply('stripped', { conversation: text }));
+    store.put(reply('missing', { conversation: text }, 'absent'));
+    store.put(reply('different', { conversation: 'Different @144400001' }));
+    store.put(reply('private', { viewOnceMessage: { message: original.message } }));
+    for (const id of ['nested', 'stripped']) assert.equal(store.message(group, id)?.quote, 'Hello @Alex and plain @777 https://example.test/@144400001');
+    assert.equal(store.message(group, 'missing')?.quote, text, 'No metadata means no guessing');
+    assert.equal(store.message(group, 'different')?.quote, 'Different @144400001');
+    assert.equal(store.message(group, 'private')?.quote, '[Unavailable message]');
+    store.contact(person, 'Alex renamed'); assert.ok(store.message(group, 'nested')?.quote?.includes('@Alex renamed'));
+    assert.equal(store.raw({ remoteJid: group, id: 'stripped' })?.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation, text);
+    store.put(reply('long', { conversation: 'x'.repeat(500) })); assert.equal(store.message(group, 'long')?.quote?.length, 200);
+  } finally { store.close(); }
 });
 
 test('existing history gains participant profiles without changing stored messages or credentials', async () => {

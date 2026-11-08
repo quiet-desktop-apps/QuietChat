@@ -4,6 +4,48 @@ Verified on **7 November 2026**, Linux, Node.js **22.22.2**, with the repository
 locked dependencies. No personal WhatsApp account was linked during development.
 
 
+## Remaining group IDs and quoted mentions — 8 November 2026 (0.2.12)
+
+History `lidPnMappings`, previously saved Baileys reverse mappings, and group
+participant update events now contribute to name resolution. Mapping imports are
+streamed into the existing SQLite index; subsequent identical mappings do not
+trigger redraws. Saved contact names outrank profile names, which outrank supplied
+usernames. Missing names fall back to a verified phone number or a short unknown
+participant label, with the original clickable identity preserved.
+
+Quoted previews resolve protocol-declared mentions, including from an exactly
+matching retained original when the reply omits mention metadata. Raw reply data,
+plain numbers and URLs are unchanged; private quotes remain unavailable.
+
+Validation: 34 core tests passed, including mapping-batch recovery, saved-mapping
+recovery without auth rewrites, malformed mapping rejection, name precedence,
+late name arrival, unknown-person routing, quote metadata and privacy. Terminal
+PTY and full GTK/D-Bus regressions passed with named/unknown participants, `@You`
+in quotes, and physical clicks on self and unknown participant links. The
+installed launcher test verified version 0.2.12 from this checkout. All fixtures
+were synthetic. No real-account files were inspected or live session restarted.
+No additional network lookup, contact RAM cache or measured RSS saving is claimed.
+A full quit/reopen loads the startup recovery; names never supplied by WhatsApp
+cannot be reconstructed.
+
+## Own-account labels — 8 November 2026 (0.2.11)
+
+The signed-in account is displayed as `You` in chats, contacts and conversation
+headers, and `@You` in protocol-declared mentions. Phone and LID identities,
+including device suffixes, are normalized from account information. Clicking a
+self-mention reuses the existing linked self chat. Search accepts `You` as well as
+the original phone/name. Account changes remove the previous display overlay.
+
+Validation: 30 core tests passed, including saved-login identity, credential
+updates, late alias mappings, unchanged raw mention text, retained saved contact
+names and protection against mislabeling other participants. The PTY regression
+passed with `@You` rendered in group history. The full GTK/D-Bus regression passed,
+including a physical click on `@You` and the resulting self-chat title. The
+installed launcher opened 0.2.11 from this checkout under isolated Xvfb/D-Bus.
+Tests used synthetic data; the running real account was neither read by diagnostic
+tools nor restarted. A full quit/reopen is required to load the new backend.
+No memory reduction is claimed for this change.
+
 ## Hidden display memory cleanup — 8 November 2026 (0.2.10)
 
 Core suite: 28 tests passed. Full native GTK/D-Bus regression passed with new

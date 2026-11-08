@@ -93,8 +93,9 @@ that ID on `WebMessageInfo.participant`, while live messages normally use
 `key.participant`. Explicit phone/LID mappings from contacts, message alternate
 IDs and mapping events link the two address forms. Saved names outrank profile
 names. Legacy cached names have unknown provenance and remain preserved until
-explicit contact sync supplies a saved name. If WhatsApp has not supplied a name
-or mapping, the UI keeps the identifier; it does not infer identity from numbers.
+explicit contact sync supplies a saved name. If WhatsApp has not supplied a name, the UI uses a verified phone number or a
+short `Unknown participant (…1234)` label. Routing keeps the full participant ID;
+it does not infer identity from numbers or merge participants by display label.
 
 Schema version 1 adds contact-name provenance and an indexed phone/LID table.
 A one-time streaming pass learns profile names from retained protocol history;
@@ -110,3 +111,24 @@ message can trigger direct-chat navigation. The backend resolves an existing
 linked direct chat where possible. Navigation preserves drafts and never sends a
 message. The terminal shares name resolution; participant-click navigation is a
 desktop feature.
+
+The signed-in account supplies normalized phone and LID identities from saved
+credentials, pairing and connection updates. These override display names with
+`You`, including `@You` in declared mentions and searchable self-chat/contact
+labels. Only the two current account IDs are retained in memory; alias resolution
+uses the existing indexed table. No network lookup or new cache is introduced.
+Saved contact names, message bodies and routing IDs remain unchanged.
+
+History-sync mapping batches and participant-update events feed the same identity
+index. At account startup the auth adapter streams already-saved Baileys numeric
+reverse mappings into that index, without copying credentials or message bodies.
+New mapping writes notify the UI only when a mapping changes. Supplied usernames
+are a last name fallback below profile and saved contact names. Identity-bearing
+protocol stubs can update names without becoming visible chat messages. No group
+roster fetch, full-history download or additional in-memory contact cache is used.
+
+Quoted previews also resolve declared mentions at read time. Where the quoted
+payload lacks metadata, the matching retained original can supply it only if the
+text matches exactly. Missing originals and ordinary numeric text are not guessed.
+Quotes remain capped at 200 characters and private quoted content stays hidden;
+protocol reply payloads and message keys are never rewritten.

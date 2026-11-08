@@ -20,7 +20,10 @@ export class WhatsAppTransport implements Transport {
   private downloading = false;
   private readonly logger = pino({ level: 'silent' });
   private readonly auth;
-  constructor(private readonly store: Store, private readonly events: AppEvents, private readonly cache: MediaCache, private readonly createSocket: typeof makeWASocket = makeWASocket) { this.auth = sqliteAuth(store); }
+  constructor(private readonly store: Store, private readonly events: AppEvents, private readonly cache: MediaCache, private readonly createSocket: typeof makeWASocket = makeWASocket) {
+    this.auth = sqliteAuth(store, () => this.events.emit('changed'));
+    this.store.setSelf(this.auth.state.creds.me);
+  }
   async start(): Promise<void> { this.stopped = false; this.connect(); }
   private connect(): void {
     if (this.stopped) return;
@@ -42,7 +45,12 @@ export class WhatsAppTransport implements Transport {
         try { handler(event); } catch (error) { this.events.emit('notice', `Could not process ${name}: ${(error as Error).message}`); }
       });
     };
-    on('creds.update', () => this.auth.save());
+    on('creds.update', update => {
+      // Pairing supplies the phone ID; connection updates may add the LID.
+      const changed = this.store.setSelf(update.me ?? this.auth.state.creds.me);
+      this.auth.save();
+      if (changed) this.events.emit('changed');
+    });
     on('connection.update', update => {
       if (update.qr) {
         this.events.emit('connection', { phase: 'qr', detail: 'Scan the QR code with WhatsApp → Linked devices' });
@@ -50,6 +58,7 @@ export class WhatsAppTransport implements Transport {
       }
       if (update.connection === 'open') {
         this.online = true; this.attempt = 0; this.auth.save();
+        if (this.store.setSelf(this.auth.state.creds.me)) this.events.emit('changed');
         this.events.emit('qr', undefined);
         this.events.emit('connection', { phase: 'online', detail: 'Connected · waiting for messages/history' });
       }
@@ -77,6 +86,7 @@ export class WhatsAppTransport implements Transport {
         this.store.alias(contact.id, contact.phoneNumber);
         this.store.alias(contact.lid, contact.phoneNumber);
         for (const id of [contact.id, contact.lid, contact.phoneNumber]) if (id) {
+          this.store.contact(id, contact.username, -1);
           this.store.contact(id, contact.notify || contact.verifiedName, 0);
           this.store.contact(id, contact.name);
         }
@@ -84,6 +94,7 @@ export class WhatsAppTransport implements Transport {
     };
     on('messaging-history.set', history => {
       this.store.transaction(() => {
+        for (const pair of history.lidPnMappings || []) this.store.alias(pair.lid, pair.pn);
         contacts(history.contacts);
         for (const chat of history.chats) if (chat.id) this.store.chat(chat.id, chat.name, Number(chat.conversationTimestamp || 0), chat.unreadCount, chat.ephemeralExpiration);
         for (const message of history.messages) this.store.put(message);
@@ -91,6 +102,8 @@ export class WhatsAppTransport implements Transport {
       });
       this.events.emit('changed');
     });
+    on('groups.update', groups => { for (const group of groups) contacts(group.participants || []); this.events.emit('changed'); });
+    on('group-participants.update', group => { contacts(group.participants); this.events.emit('changed'); });
     on('lid-mapping.update', mapping => { this.store.alias(mapping.lid, mapping.pn); this.events.emit('changed'); });
     on('contacts.upsert', items => { contacts(items); this.events.emit('changed'); });
     on('contacts.update', items => { contacts(items); this.events.emit('changed'); });
