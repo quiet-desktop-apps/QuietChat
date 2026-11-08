@@ -9,7 +9,7 @@ import re
 import signal
 import sys
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote as uri_quote, unquote as uri_unquote
 
 os.environ.setdefault('GSK_RENDERER', 'cairo')
 import gi
@@ -37,7 +37,14 @@ def links(text):
         except ValueError: continue
 
 
-def markup(text):
+def person_link(jid, text):
+    return f'<a href="quietchat-person:{uri_quote(jid, safe="")}">{GLib.markup_escape_text(text)}</a>'
+
+
+def markup(text, parts=None):
+    if parts:
+        return ''.join(person_link(part['jid'], part['text']) if part.get('jid') else markup(part['text']) for part in parts)
+
     parts, offset = [], 0
     for start, end, url in links(text):
         parts += [GLib.markup_escape_text(text[offset:start]), f'<a href="{GLib.markup_escape_text(url)}">{GLib.markup_escape_text(url)}</a>']
@@ -513,12 +520,16 @@ class QuietChat(Gtk.Application):
         self.message_boxes[message['id']] = bubble
         header = Gtk.Box(spacing=16)
         author = label('You' if message['mine'] else message['sender'], 'message-meta'); author.set_hexpand(True)
+        if not message['mine'] and message.get('senderId'):
+            author.set_markup(person_link(message['senderId'], message['sender']))
+            author.connect('activate-link', lambda _label, uri, m=message: self.message_link(uri, m))
+            author.set_tooltip_text('Open a direct conversation')
         author.set_ellipsize(Pango.EllipsizeMode.END); author.set_max_width_chars(38)
         header.append(author); header.append(label(time.strftime('%H:%M', time.localtime(message['time'])), 'message-meta')); bubble.append(header)
         if message.get('quote'):
             quote = label('↪ ' + message['quote'], 'muted', True, True); quote.set_max_width_chars(62); bubble.append(quote)
         body = label(wrap=True, selectable=True, css='message-body'); body.set_max_width_chars(64)
-        body.set_markup(markup(message['text'])); body.connect('activate-link', lambda _label, uri: self.open_link(uri)); bubble.append(body)
+        body.set_markup(markup(message['text'], message.get('parts'))); body.connect('activate-link', lambda _label, uri, m=message: self.message_link(uri, m)); bubble.append(body)
         preview = message.get('preview') or {}
         urls = list(links(message['text']))
         if urls:
@@ -604,6 +615,21 @@ class QuietChat(Gtk.Application):
                 picture.set_filename(result['path'])
             self.notice('Preview loaded. Links always open in your normal browser.')
         self.bridge.request('urlPreview', complete, url=url)
+
+    def message_link(self, uri, message):
+        if not uri.startswith('quietchat-person:'): return self.open_link(uri)
+        person = uri_unquote(uri.removeprefix('quietchat-person:'))
+        allowed = {part.get('jid') for part in message.get('parts') or []}
+        allowed.add(message.get('senderId'))
+        if person not in allowed: return True
+        if self.busy: self.notice('Wait for the current send to finish.'); return True
+        generation = self.generation
+        def complete(result, error):
+            if generation != self.generation: return
+            if error: self.notice(error, True); return
+            self.open_chat(result)
+        self.bridge.request('person', complete, person=person)
+        return True
 
     def open_link(self, url):
         if urlparse(url).scheme not in ('http','https'): return True
@@ -752,7 +778,7 @@ class QuietChat(Gtk.Application):
     def show_help(self):
         dialog = Gtk.Dialog(title='QuietChat controls', transient_for=self.window, modal=True)
         dialog.add_button('Close', Gtk.ResponseType.CLOSE)
-        content = label('Select text with the mouse, then Ctrl+C to copy. Ctrl+V pastes text\nor attaches a clipboard image, ready to send with an optional caption.\nClick links normally. Copy chat copies the current message page.\n\nEnter sends · Shift+Enter adds a line · F8 replies · Escape cancels a reply\nF3 attaches · F4 enters a path · F5 emoji · F6 reaction\nF7 contacts/chats · F9 search · F10 opens media · Ctrl+Q quits\n\nClosing the window keeps QuietChat in the system tray when available.\nUse the menu or tray menu to quit fully.', wrap=True, selectable=True)
+        content = label('Select text with the mouse, then Ctrl+C to copy. Ctrl+V pastes text\nor attaches a clipboard image, ready to send with an optional caption.\nClick a sender or @mention to open a direct chat.\nClick links normally. Copy chat copies the current message page.\n\nEnter sends · Shift+Enter adds a line · F8 replies · Escape cancels a reply\nF3 attaches · F4 enters a path · F5 emoji · F6 reaction\nF7 contacts/chats · F9 search · F10 opens media · Ctrl+Q quits\n\nClosing the window keeps QuietChat in the system tray when available.\nUse the menu or tray menu to quit fully.', wrap=True, selectable=True)
         margins(content,20); dialog.get_content_area().append(content)
         dialog.connect('response', lambda window, _response: window.destroy()); dialog.present()
 

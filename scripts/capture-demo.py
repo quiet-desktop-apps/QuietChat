@@ -23,12 +23,13 @@ try:
     while not app.ready and time.monotonic() < deadline: pump()
     assert app.ready
     app.window.set_default_size(1120, 900)
-    app.open_chat_id('demo-alex@s.whatsapp.net')
+    group = '--group' in sys.argv
+    app.open_chat_id('demo-weekend@g.us' if group else 'demo-alex@s.whatsapp.net')
     pump(3)
-    assert len(app.messages) >= 5
+    assert len(app.messages) >= (2 if group else 5)
     app.update_memory()
     pump(.5)
-    target = Path(__file__).resolve().parents[1] / 'docs/images/quietchat-desktop.png'
+    target = Path(__file__).resolve().parents[1] / 'docs/images' / ('quietchat-group.png' if group else 'quietchat-desktop.png')
     ImageGrab.grab(bbox=(0, 0, app.window.get_surface().get_width(), app.window.get_surface().get_height()), xdisplay=os.environ['DISPLAY']).save(target)
     print(target.name)
 finally:

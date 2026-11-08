@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { proto, normalizeMessageContent, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
 import { isChatJid, type Chat, type Message, type ReplyTarget } from './model.js';
+import { mentionParts, personId, profileName, senderId } from './identities.js';
 
 type Row = { chat: string; id: string; sender: string; mine: number; time: number; text: string; kind: Message['kind']; reactions: string; quote: string | null };
 export const HISTORY_LIMIT = 10_000;
@@ -12,7 +13,7 @@ export function describeMessage(raw: WAMessage): Omit<Message, 'reactions'> | un
   const envelope = raw.message;
   const content = normalizeMessageContent(envelope);
   if (!content || content.protocolMessage || content.reactionMessage || content.senderKeyDistributionMessage && Object.keys(content).length === 1) return;
-  const base = { chat, id, sender: raw.pushName || raw.key.participant || chat, mine: !!raw.key.fromMe, time: Number(raw.messageTimestamp || Math.floor(Date.now() / 1000)) };
+  const base = { chat, id, sender: raw.pushName || senderId(raw) || (chat.endsWith('@g.us') ? 'Unknown participant' : chat), mine: !!raw.key.fromMe, time: Number(raw.messageTimestamp || Math.floor(Date.now() / 1000)) };
   // Do not retain or expose view-once/disappearing content in this first prototype.
   const privateMedia = envelope.viewOnceMessage || envelope.viewOnceMessageV2 || envelope.viewOnceMessageV2Extension;
   const expires = envelope.ephemeralMessage || raw.ephemeralDuration || content.extendedTextMessage?.contextInfo?.expiration || content.imageMessage?.contextInfo?.expiration || content.videoMessage?.contextInfo?.expiration;
@@ -38,6 +39,8 @@ export class Store {
       PRAGMA cache_size=-2048; PRAGMA secure_delete=ON;
       CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL DEFAULT 0, unread INTEGER NOT NULL DEFAULT 0, expiration INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS contacts(id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS person_aliases(lid TEXT PRIMARY KEY, pn TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS person_phone ON person_aliases(pn);
       CREATE TABLE IF NOT EXISTS messages(chat TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, id TEXT NOT NULL, sender TEXT NOT NULL, mine INTEGER NOT NULL, time INTEGER NOT NULL, text TEXT NOT NULL, kind TEXT NOT NULL, raw BLOB, reactions TEXT NOT NULL DEFAULT '', PRIMARY KEY(chat,id));
       CREATE INDEX IF NOT EXISTS message_time ON messages(chat,time DESC,id DESC);
       CREATE INDEX IF NOT EXISTS message_global_time ON messages(time DESC);
@@ -45,14 +48,72 @@ export class Store {
       CREATE TABLE IF NOT EXISTS auth(category TEXT NOT NULL,id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(category,id));`);
     if (!(this.db.prepare('PRAGMA table_info(chats)').all() as { name: string }[]).some(column => column.name === 'expiration')) this.db.exec('ALTER TABLE chats ADD COLUMN expiration INTEGER NOT NULL DEFAULT 0');
     if (!(this.db.prepare('PRAGMA table_info(messages)').all() as { name: string }[]).some(column => column.name === 'quote')) this.db.exec('ALTER TABLE messages ADD COLUMN quote TEXT');
+    // Existing names have unknown provenance: preserve them until contact sync
+    // supplies an explicitly saved name (2). Profile updates (0) cannot erase them.
+    if (!(this.db.prepare('PRAGMA table_info(contacts)').all() as { name: string }[]).some(column => column.name === 'source')) this.db.exec('ALTER TABLE contacts ADD COLUMN source INTEGER NOT NULL DEFAULT 1');
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 1) {
+      this.transaction(() => {
+        // Stream retained history once; do not load message/media blobs together.
+        for (const row of this.db.prepare('SELECT raw FROM messages WHERE raw IS NOT NULL ORDER BY time,id').iterate()) {
+          let raw: proto.WebMessageInfo;
+          try { raw = proto.WebMessageInfo.decode(row.raw as Uint8Array); }
+          catch { continue; } // Skip damaged protocol rows; database failures still roll back.
+          if (raw.key) this.rememberPerson({ ...raw, key: raw.key });
+        }
+        this.db.exec('PRAGMA user_version=1');
+      });
+    }
   }
   transaction(fn: () => void): void {
     this.db.exec('BEGIN IMMEDIATE');
     try { fn(); this.db.exec('COMMIT'); } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  contact(id: string, name?: string | null): void {
-    if (!isChatJid(id) || !name) return;
-    this.db.prepare('INSERT INTO contacts VALUES (?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name').run(id, name);
+  contact(id: string, name?: string | null, source = 2): void {
+    const person = personId(id), clean = profileName(name);
+    if (!person || !clean) return;
+    this.db.prepare(`INSERT INTO contacts(id,name,source) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE
+      SET name=excluded.name,source=excluded.source WHERE excluded.source>=contacts.source`).run(person, clean, source);
+  }
+  alias(first?: string | null, second?: string | null): void {
+    const a = personId(first), b = personId(second);
+    if (!a || !b || a === b || a.split('@')[1] === b.split('@')[1]) return;
+    const [lid, pn] = a.endsWith('@lid') ? [a,b] : [b,a];
+    this.db.prepare('INSERT INTO person_aliases VALUES (?,?) ON CONFLICT(lid) DO UPDATE SET pn=excluded.pn').run(lid,pn);
+  }
+  private personIds(id: string): string[] {
+    const person = personId(id);
+    if (!person) return [];
+    const aliases = [person];
+    if (person.endsWith('@lid')) {
+      const row = this.db.prepare('SELECT pn FROM person_aliases WHERE lid=?').get(person);
+      if (typeof row?.pn === 'string') aliases.push(row.pn);
+    } else {
+      for (const row of this.db.prepare('SELECT lid FROM person_aliases WHERE pn=? LIMIT 8').all(person)) aliases.push(String(row.lid));
+    }
+    return aliases;
+  }
+  personName(id: string): string | undefined {
+    const aliases = this.personIds(id), person = aliases[0];
+    if (!person) return;
+    const slots = aliases.map(() => '?').join(',');
+    const row = this.db.prepare(`SELECT name FROM contacts WHERE id IN (${slots}) ORDER BY source DESC, id=? DESC LIMIT 1`).get(...aliases, person);
+    if (typeof row?.name === 'string') return row.name;
+    const chat = this.db.prepare(`SELECT name FROM chats WHERE id IN (${slots}) AND name<>'' ORDER BY id=? DESC LIMIT 1`).get(...aliases,person);
+    return typeof chat?.name === 'string' ? chat.name : undefined;
+  }
+  directChat(id: string): Chat {
+    const aliases = this.personIds(id), person = aliases[0];
+    if (!person) throw new Error('This participant has no available direct-chat identity.');
+    const slots = aliases.map(() => '?').join(',');
+    const existing = this.db.prepare(`SELECT id,updated,unread FROM chats WHERE id IN (${slots}) ORDER BY id=? DESC,updated DESC LIMIT 1`).get(...aliases, person);
+    const target = existing ? String(existing.id) : person;
+    return { id: target, name: this.personName(person) || target, updated: Number(existing?.updated || 0), unread: Number(existing?.unread || 0), preview: '' };
+  }
+  private rememberPerson(raw: WAMessage): void {
+    const id = senderId(raw);
+    if (raw.key.remoteJid?.endsWith('@g.us')) this.alias(id, raw.key.participantAlt);
+    else this.alias(raw.key.remoteJid, raw.key.remoteJidAlt);
+    if (id && !raw.key.fromMe) this.contact(id, raw.pushName, 0);
   }
   chat(id: string, name?: string | null, updated = 0, unread?: number | null, expiration?: number | null): void {
     if (!isChatJid(id)) return;
@@ -65,12 +126,12 @@ export class Store {
   put(raw: WAMessage, notify = false): boolean {
     let message = describeMessage(raw);
     if (!message) return false;
+    this.rememberPerson(raw);
     if (this.expiration(message.chat) > 0) message = { ...message, text: '[View this disappearing message on your phone]', kind: 'unsupported', raw: undefined };
     this.chat(message.chat, undefined, message.time);
     const result = this.db.prepare(`INSERT INTO messages(chat,id,sender,mine,time,text,kind,raw,quote) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(chat,id) DO NOTHING`)
       .run(message.chat, message.id, message.sender, +message.mine, message.time, message.text, message.kind, message.raw ? proto.WebMessageInfo.encode(message.raw).finish() : null, message.raw ? message.quote ?? null : null);
     if (notify && !message.mine && result.changes) this.db.prepare('UPDATE chats SET unread=unread+1 WHERE id=?').run(message.chat);
-    if (!message.chat.endsWith('@g.us') && !message.mine && raw.pushName) this.db.prepare('INSERT OR IGNORE INTO contacts VALUES (?,?)').run(message.chat, raw.pushName);
     return !!result.changes;
   }
   update(key: WAMessageKey, message: WAMessage['message']): void {
@@ -99,25 +160,32 @@ export class Store {
     return this.db.prepare(`SELECT id,name,0 updated,0 unread,'' preview FROM contacts WHERE id LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 200`).all(pattern, pattern) as Chat[];
   }
   displayName(id: string): string | undefined {
+    if (personId(id)) return this.personName(id);
     if (!isChatJid(id)) return;
-    const row = this.db.prepare(`SELECT coalesce((SELECT nullif(name,'') FROM chats WHERE id=?),
-      (SELECT nullif(name,'') FROM contacts WHERE id=?)) name`).get(id, id);
+    const row = this.db.prepare("SELECT nullif(name,'') name FROM chats WHERE id=?").get(id);
     return typeof row?.name === 'string' ? row.name : undefined;
   }
+  private present(row: Row): Message {
+    const raw = this.raw({ remoteJid: row.chat, id: row.id });
+    const group = row.chat.endsWith('@g.us');
+    const id = raw ? senderId(raw) : personId(group ? row.sender : row.chat);
+    // Old rows may contain the group JID as sender. Never resolve that to a title.
+    const fallback = profileName(raw?.pushName) || (!isChatJid(row.sender) ? row.sender : undefined);
+    const sender = (id && this.personName(id)) || fallback || id || 'Unknown participant';
+    const parts = mentionParts(row.text, raw, jid => this.personName(jid));
+    return { ...row, sender, senderId: row.mine ? undefined : id, mine: !!row.mine,
+      text: parts ? parts.map(part => part.text).join('') : row.text, parts, quote: row.quote ?? undefined };
+  }
   messages(chat: string, offset = 0): Message[] {
-    // Resolve names at read time so old history also benefits from contact sync.
-    // A group title must never replace an individual participant's name.
-    const directName = chat.endsWith('@g.us') ? undefined : this.displayName(chat);
+    // Resolve names at read time so retained history benefits from later sync.
     return (this.db.prepare(`SELECT chat,id,sender,mine,time,text,kind,quote,coalesce((SELECT substr(group_concat(emoji,' '),1,512) FROM reactions r WHERE r.chat=messages.chat AND r.id=messages.id),'') reactions FROM messages WHERE chat=? ORDER BY time DESC,id DESC LIMIT ? OFFSET ?`).all(chat, PAGE_SIZE, offset) as Row[])
-      .reverse().map(row => ({ ...row, sender: directName || this.displayName(row.sender) || row.sender, mine: !!row.mine, quote: row.quote ?? undefined }));
+      .reverse().map(row => this.present(row));
   }
   message(chat: string, id: string): Message | undefined {
     const row = this.db.prepare(`SELECT chat,id,sender,mine,time,text,kind,quote,
       coalesce((SELECT substr(group_concat(emoji,' '),1,512) FROM reactions r WHERE r.chat=messages.chat AND r.id=messages.id),'') reactions
       FROM messages WHERE chat=? AND id=?`).get(chat, id) as Row | undefined;
-    if (!row) return;
-    const name = !chat.endsWith('@g.us') ? this.displayName(chat) : this.displayName(row.sender);
-    return { ...row, sender: name || row.sender, mine: !!row.mine, quote: row.quote ?? undefined };
+    return row ? this.present(row) : undefined;
   }
   unread(): number { return Number(this.db.prepare('SELECT coalesce(sum(unread),0) total FROM chats').get()?.total || 0); }
   unreadChats(): Record<string, number> {

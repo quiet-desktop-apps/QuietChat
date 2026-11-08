@@ -78,7 +78,8 @@ so switching does not require pairing again. The first login uses
 
 Desktop features include circular contact photos, clickable links, optional URL
 previews, clipboard image attachments, per-chat drafts, quoted replies and unread
-badges. Read the [user guide](docs/usage.md) and [terminal guide](docs/terminal.md).
+badges. Group senders and @mentions use saved contact or available profile names;
+click a name to open a direct conversation. Read the [user guide](docs/usage.md) and [terminal guide](docs/terminal.md).
 There are no signed binary packages or automatic updates yet. To update a clean
 source checkout, pull `master`, run `npm ci`, then fully quit and reopen the app.
 

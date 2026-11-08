@@ -60,8 +60,8 @@ async function main(): Promise<void> {
   events.on('incoming', message => {
     unreadRevision++;
     const raw = store.raw({ remoteJid: message.chat, id: message.id });
-    emit('incoming', { message: { ...message, text: message.text.slice(0,300), raw: undefined }, chat_name: store.displayName(message.chat) || message.chat,
-      avatar_id: raw?.key.participant || message.chat, ...unreadState() });
+    emit('incoming', { message: { ...message, text: message.text.slice(0,300), parts: undefined, raw: undefined }, chat_name: store.displayName(message.chat) || message.chat,
+      avatar_id: message.senderId || raw?.key.participant || message.chat, ...unreadState() });
   });
   events.on('qr', qr => {
     const own = ++generation;
@@ -76,7 +76,12 @@ async function main(): Promise<void> {
   const messageView = (message: Message) => {
     const content = normalizeMessageContent(store.raw({ remoteJid: message.chat, id: message.id })?.message);
     const link = content?.extendedTextMessage;
-    return { ...message, text: message.text.slice(0,16000), raw: undefined,
+    let remaining = 16000;
+    const parts = message.parts?.flatMap(part => {
+      const text = part.text.slice(0, remaining); remaining -= text.length;
+      return text ? [{ ...part, text }] : [];
+    });
+    return { ...message, text: message.text.slice(0,16000), parts, raw: undefined,
       preview: link?.title || link?.description ? { title: link.title?.slice(0,160), description: link.description?.slice(0,400), url: link.matchedText } : undefined,
       thumbnail: !!(content?.imageMessage?.jpegThumbnail || content?.videoMessage?.jpegThumbnail || link?.jpegThumbnail || values.demo && (message.kind === 'image' || message.kind === 'video')) };
   };
@@ -89,6 +94,7 @@ async function main(): Promise<void> {
         const offset = Math.max(0, Math.floor(Number(command.offset) || 0));
         return { chat, offset, messages: store.messages(chat, offset).map(messageView), page_size: PAGE_SIZE, name: store.displayName(chat) || chat };
       }
+      case 'person': return store.directChat(String(command.person || ''));
       case 'read': store.markViewed(chat); events.emit('changed'); return unreadState();
       case 'send': {
         if (String(command.text || '').length > 16000) throw new Error('Messages are limited to 16,000 characters.');

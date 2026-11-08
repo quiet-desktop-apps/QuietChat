@@ -209,6 +209,16 @@ def run():
             send("\r")
             assert rows("SELECT chat FROM messages WHERE text='Alex draft'") == [("demo-alex@s.whatsapp.net",)], "Mouse navigation or per-chat draft restore failed"
 
+            # Group display uses the same resolved names and mentions as GTK.
+            send("\x1b[20~")
+            send("Weekend")
+            send("\r")
+            send("\r")
+            group_snapshot = "\n".join(snapshot_lines())
+            assert "Ada (work)" in group_snapshot and "Lin" in group_snapshot
+            assert "@Ada (work)" in group_snapshot and "@Lin" in group_snapshot
+            assert "@140000001" not in group_snapshot, "Terminal mention was not resolved"
+
             # Terminal QR and generated PNG fallback, then remove on connection.
             child.send_signal(signal.SIGUSR1)
             pump()
@@ -234,7 +244,7 @@ def run():
             send("\x11")  # Ctrl+Q
             child.wait(timeout=3)
             assert child.returncode == 0
-            print(json.dumps({"terminal_smoke": "passed", "checks": ["startup", "F8 quoted reply (text and image)", "reply cancellation", "reply retention on failure and chat switching", "selected panel removed", "multiline bubbles", "left/right alignment", "long-text wrapping and resize", "bubble keyboard navigation", "multiline bubble mouse selection/reaction", "text send", "failed-send draft retention", "emoji", "reaction", "image attachment", "contact search", "recipient selection", "mouse navigation", "per-chat drafts", "QR PNG generation/permissions/removal", "small-terminal QR fallback", "clean shutdown"], "offline_idle_rss": rss.split(":", 1)[1].strip()}, indent=2))
+            print(json.dumps({"terminal_smoke": "passed", "checks": ["startup", "group participant names and mentions", "F8 quoted reply (text and image)", "reply cancellation", "reply retention on failure and chat switching", "selected panel removed", "multiline bubbles", "left/right alignment", "long-text wrapping and resize", "bubble keyboard navigation", "multiline bubble mouse selection/reaction", "text send", "failed-send draft retention", "emoji", "reaction", "image attachment", "contact search", "recipient selection", "mouse navigation", "per-chat drafts", "QR PNG generation/permissions/removal", "small-terminal QR fallback", "clean shutdown"], "offline_idle_rss": rss.split(":", 1)[1].strip()}, indent=2))
         except Exception:
             # Only synthetic demo data is present in this diagnostic output.
             if child.poll() is None:

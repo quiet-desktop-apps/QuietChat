@@ -21,6 +21,13 @@ export class DemoTransport implements Transport {
     this.store.put({ key: { remoteJid: chat, id: 'video', fromMe: false }, pushName: 'Alex', messageTimestamp: time - 20, message: { videoMessage: { caption: 'A two-second test video. Media opens only when you select it.', mimetype: 'video/mp4' } } });
     this.media.set('image', fileURLToPath(new URL('../../test/fixtures/demo.png', import.meta.url)));
     this.media.set('video', fileURLToPath(new URL('../../test/fixtures/demo.mp4', import.meta.url)));
+    // Synthetic group history exercises saved names, profile-only names and LID mentions.
+    this.store.contact('447700900001@s.whatsapp.net', 'Ada (work)');
+    this.store.alias('140000001@lid', '447700900001@s.whatsapp.net');
+    this.store.put({ key: { remoteJid: 'demo-weekend@g.us', id: 'group-saved' }, participant: '140000001@lid', pushName: 'Ada', messageTimestamp: time - 310,
+      message: { conversation: 'Thanks everyone! Looking forward to Saturday.' } });
+    this.store.put({ key: { remoteJid: 'demo-weekend@g.us', id: 'group-profile', participant: '140000002@lid' }, pushName: 'Lin', messageTimestamp: time - 300,
+      message: { extendedTextMessage: { text: 'Hi @140000001 👋\nCan you share the plan with @140000002? https://example.com/weekend', contextInfo: { mentionedJid: ['140000001@lid', '140000002@lid'] } } } });
     this.events.emit('connection', { phase: 'online', detail: 'Offline demo · no WhatsApp connection · choose Alex to try it' });
     this.events.emit('changed');
   }

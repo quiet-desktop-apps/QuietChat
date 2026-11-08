@@ -135,7 +135,7 @@ test('old direct-chat messages resolve the saved name without rewriting protocol
     store.contact(chat, 'Renamed contact');
     assert.equal(store.messages(chat)[0].sender, 'Renamed contact');
     store.chat(chat, 'Chat display name');
-    assert.equal(store.messages(chat)[0].sender, 'Chat display name');
+    assert.equal(store.messages(chat)[0].sender, 'Renamed contact', 'Saved contacts take precedence over chat/profile titles');
     assert.equal(store.raw({ remoteJid: chat, id: 'history' })?.pushName, undefined);
   } finally { store.close(); }
 });
@@ -151,6 +151,93 @@ test('group messages use participant names rather than the group title', () => {
     store.put({ ...message('group-push', 101), pushName: 'Sam', key: { remoteJid: group, id: 'group-push', participant: '456@s.whatsapp.net' } });
     assert.equal(store.messages(group)[1].sender, 'Sam');
   } finally { store.close(); }
+});
+
+test('history participants and profile names resolve without ever attributing messages to the group', () => {
+  const store = new Store(':memory:'), group = 'demo@g.us', person = '456@lid';
+  try {
+    store.chat(group, 'Group title');
+    store.put({ key: { remoteJid: group, id: 'old' }, participant: person, message: { conversation: 'Old history' } });
+    assert.equal(store.message(group, 'old')?.senderId, person);
+    assert.equal(store.message(group, 'old')?.sender, person);
+    store.put({ key: { remoteJid: group, id: 'new', participant: person }, pushName: 'Profile name', message: { conversation: 'New arrival' } });
+    assert.equal(store.message(group, 'old')?.sender, 'Profile name');
+    store.contact('447700900001@s.whatsapp.net', 'Saved friend');
+    store.alias(person, '447700900001@s.whatsapp.net');
+    assert.equal(store.message(group, 'new')?.sender, 'Saved friend');
+    store.contact(person, 'Changed profile', 0);
+    assert.equal(store.message(group, 'old')?.sender, 'Saved friend');
+    store.put({ key: { remoteJid: group, id: 'missing' }, message: { conversation: 'No identity' } });
+    assert.equal(store.message(group, 'missing')?.sender, 'Unknown participant');
+    assert.equal(store.message(group, 'missing')?.senderId, undefined);
+    store.db.prepare('UPDATE messages SET sender=? WHERE id=?').run(group, 'missing');
+    assert.equal(store.message(group, 'missing')?.sender, 'Unknown participant');
+  } finally { store.close(); }
+});
+
+test('declared mentions resolve contacts and profiles, preserve protocol text, and never rewrite URLs or plain numbers', () => {
+  const store = new Store(':memory:'), group = 'mentions@g.us', person = '1400123@lid';
+  const text = '👋 @1400123, meet @456 and @789. Again @1400123! Plain @999, x@1400123, @14001230, https://example.test/@1400123';
+  try {
+    store.contact('447700900001@s.whatsapp.net', 'José & Ana <friends>');
+    store.alias(person, '447700900001@s.whatsapp.net');
+    store.contact('456@lid', 'Lin', 0);
+    const raw: WAMessage = { key: { remoteJid: group, id: 'mention', participant: person },
+      message: { extendedTextMessage: { text, contextInfo: { mentionedJid: [person, '456@lid', '789@lid'] } } } };
+    store.put(raw);
+    const view = store.message(group, 'mention')!;
+    assert.equal(view.text, '👋 @José & Ana <friends>, meet @Lin and @789. Again @José & Ana <friends>! Plain @999, x@1400123, @14001230, https://example.test/@1400123');
+    assert.deepEqual(view.parts?.filter(part => part.jid).map(part => part.jid), [person, '456@lid', '789@lid', person]);
+    assert.equal(view.parts?.map(part => part.text).join(''), view.text);
+    assert.equal(store.raw(raw.key)?.message?.extendedTextMessage?.text, text);
+    store.contact(person, 'Saved LID name');
+    assert.ok(store.message(group, 'mention')?.text.includes('@Saved LID name'));
+    for (const kind of ['imageMessage', 'videoMessage'] as const) {
+      store.put({ ...raw, key: { ...raw.key, id: kind }, message: { [kind]: { caption: '@456 photo', contextInfo: { mentionedJid: ['456@lid'] } } } });
+      assert.equal(store.message(group, kind)?.text, '@Lin photo');
+    }
+    assert.throws(() => store.directChat(group), /no available/);
+    assert.equal(store.directChat(person).id, person);
+    store.chat('447700900001@s.whatsapp.net');
+    assert.equal(store.directChat(person).id, '447700900001@s.whatsapp.net', 'Reuse an existing phone-ID conversation');
+    assert.equal(store.messages('447700900001@s.whatsapp.net').length, 0, 'Opening a person must not send anything');
+  } finally { store.close(); }
+});
+
+test('contact sync preserves saved names and maps LID/phone identities, including message alternate IDs', async () => {
+  const store = new Store(':memory:'), events = new AppEvents(), ev = new EventEmitter();
+  const adapter = new WhatsAppTransport(store, events, new MediaCache('/unused'), () => ({ ev, end: () => {} } as unknown as WASocket));
+  try {
+    await adapter.start();
+    ev.emit('contacts.upsert', [{ id: '100@s.whatsapp.net', name: 'Address book', lid: '200@lid' }]);
+    ev.emit('contacts.update', [{ id: '200@lid', notify: 'Profile replacement' }]);
+    assert.equal(store.personName('200@lid'), 'Address book');
+    ev.emit('contacts.upsert', [{ id: '300@lid', notify: 'Unsaved profile' }]);
+    ev.emit('lid-mapping.update', { lid: '300@lid', pn: '400@s.whatsapp.net' });
+    assert.equal(store.personName('400@s.whatsapp.net'), 'Unsaved profile');
+    store.contact('500@s.whatsapp.net', 'Alternate identity');
+    store.put({ key: { remoteJid: 'test@g.us', id: 'alt', participant: '600:2@lid', participantAlt: '500@s.whatsapp.net' }, message: { conversation: 'Hello' } });
+    assert.equal(store.message('test@g.us', 'alt')?.sender, 'Alternate identity');
+    assert.equal(store.message('test@g.us', 'alt')?.senderId, '600@lid');
+  } finally { adapter.stop(); store.close(); }
+});
+
+test('existing history gains participant profiles without changing stored messages or credentials', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'quietchat-person-migration-'));
+  const path = join(directory, 'test.db'), group = 'old@g.us';
+  let store = new Store(path);
+  try {
+    store.put({ key: { remoteJid: group, id: 'old' }, participant: '123@lid', message: { conversation: 'Before name' } });
+    store.put({ key: { remoteJid: group, id: 'named' }, participant: '123@lid', pushName: 'Historic profile', message: { conversation: 'With name' } });
+    store.db.exec("DELETE FROM contacts; ALTER TABLE contacts DROP COLUMN source; PRAGMA user_version=0;");
+    store.db.prepare("INSERT INTO auth VALUES ('test','saved','unchanged')").run();
+    const before = store.raw({ remoteJid: group, id: 'old' });
+    store.close(); store = new Store(path);
+    assert.equal(store.message(group, 'old')?.sender, 'Historic profile');
+    assert.deepEqual(store.raw({ remoteJid: group, id: 'old' }), before);
+    assert.equal(store.db.prepare("SELECT value FROM auth WHERE category='test'").get()?.value, 'unchanged');
+    assert.equal(store.db.prepare('PRAGMA user_version').get()?.user_version, 1);
+  } finally { store.close(); await rm(directory, { recursive: true }); }
 });
 
 test('history deduplicates, pages chronologically, bounds retention, and excludes raw media from UI rows', () => {

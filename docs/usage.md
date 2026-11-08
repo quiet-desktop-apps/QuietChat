@@ -51,6 +51,15 @@ tests use synthetic accounts and never message your contacts.
 - Chat/contact rows show small circular profile photos, with initials when no photo
   is available. Photos load as rows become visible; the in-memory avatar cache holds
   at most 64 tiny 36×36 images.
+- Group messages show your saved contact name first, then the person's available
+  WhatsApp profile name. A group title is never used as a participant's name.
+  If no name has synced, the identifier remains visible; missing sender metadata
+  displays “Unknown participant.” Names update as contact/profile data arrives.
+- Click a sender's name or an **@mention** in the desktop UI to open a direct chat.
+  Opening it does not send anything; your group draft is preserved. Existing direct
+  chats are reused when WhatsApp has supplied the person's linked identifiers.
+  Both desktop and terminal resolve declared mentions in text and media captions;
+  ordinary @numbers and URLs are not guessed to be contacts.
 - Incoming messages align left; yours align right. Explicit newlines remain intact.
 - **Drag over message text, then Ctrl+C**. **Ctrl+V** pastes into the composer or
   another application. Ctrl+Shift+C/V also work. Pasting never sends a message.
@@ -143,3 +152,10 @@ Native code is under `native/`; `src/native-bridge.ts` provides typed-backend
 operations through bounded JSON-lines IPC. The CLI and GTK frontend share transport,
 authentication, media handling and SQLite rather than running two account sessions.
 The [terminal guide](terminal.md) retains the earlier terminal-specific details.
+
+## Group example
+
+This offline example uses synthetic people: **Ada (work)** is a saved contact,
+while **Lin** is known only by the profile name. Mentions use those same names.
+
+![Synthetic group conversation with named participants and clickable mentions](images/quietchat-group.png)
