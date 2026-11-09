@@ -21,6 +21,7 @@ flowchart LR
 | Component | Responsibility |
 |---|---|
 | `native/app.py` | GTK widgets, current message page, drafts, actions, clipboard and view lifecycle |
+| `native/message_scroll.py` | Layout-driven bottom following and preservation of deliberate scroll position |
 | `native/bridge.py` | Child process, bounded result queue and main-loop callback delivery |
 | `native/desktop_services.py` | StatusNotifierItem, notifications, unread reconciliation and launcher counts |
 | `native/clipboard_images.py` | Async image encoding and private temporary attachment lifetime |
@@ -47,6 +48,11 @@ do not rebuild the UI. A coalesced cleanup collects cycles and optionally return
 unused native heap pages through glibc after navigation settles. Sidebar queries return up to
 200 chats; only visible avatars are requested. Decoded offscreen photos are
 evicted; unavailable-photo metadata remains bounded to 64 entries.
+Opening a conversation follows the latest message as GTK completes layout and
+late previews change its height. Scrolling up suspends following. A transparent
+bottom-right shortcut restores the latest page directly, without fetching all
+intermediate pages. Adjustment signals replace fixed-delay scroll timers; the
+scroll controller holds only the adjustment and scalar position state.
 Thumbnails are bounded to 12 automatic previews per page and two workers. Backend
 history retains up to 10,000 messages. Preview disk cache is 200 files / 16 MiB;
 media disk cache is 256 MiB, with 100 MiB per attachment. Clipboard drafts have

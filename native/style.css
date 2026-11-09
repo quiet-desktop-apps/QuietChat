@@ -13,6 +13,8 @@ button { background: #263b44; color: #e6edf0; border: 1px solid #37515b; border-
 button:hover { background: #34525b; }
 button.suggested-action { background: #87dfb8; color: #102a20; font-weight: 700; border: 0; }
 button.flat { background: transparent; border: 0; padding: 4px 6px; }
+button.latest-message { background: transparent; color: #a4e9d8; border: 1px solid #739c91; border-radius: 24px; min-width: 24px; min-height: 24px; padding: 10px; }
+button.latest-message:hover, button.latest-message:focus-visible { background: alpha(#174c3b,.85); border-color: #a4e9d8; }
 button:disabled { opacity: .45; }
 entry, searchentry, textview, textview text { background: #1c3038; color: #ecf3f5; caret-color: #9ae5c6; }
 entry, searchentry { border-radius: 8px; border: 1px solid #37515b; padding: 6px; }
