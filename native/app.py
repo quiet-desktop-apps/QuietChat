@@ -501,7 +501,7 @@ class QuietChat(Gtk.Application):
         self.bridge.request('avatar', avatar_done, chat=chat['id'])
 
     def release_messages(self):
-        self.message_position.paused = True
+        self.message_position.pause()
         self.latest_button.set_visible(False)
         focus = self.window.get_focus()
         if focus and focus.is_ancestor(self.message_list): self.composer.grab_focus()
@@ -980,6 +980,7 @@ class QuietChat(Gtk.Application):
     def shutdown(self):
         if self.quitting: return
         self.quitting = True
+        if self.window: self.message_position.pause()
         if self.reclaim_source: GLib.source_remove(self.reclaim_source); self.reclaim_source = None
         if self.avatar_source: GLib.source_remove(self.avatar_source); self.avatar_source = None
         if self.desktop: self.desktop.close()

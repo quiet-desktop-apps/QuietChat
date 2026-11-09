@@ -270,7 +270,13 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     wait(lambda:1 in closed_notifications,'Reading did not dismiss the old popup/dock notification')
     runpy.run_path(str(ROOT/'scripts/badge-smoke.py'))['exercise'](app, pump, wait, notifications, closed_notifications, dock_updates, tray_updates, defer_notifications, delayed_notifications, state_dir)
     runpy.run_path(str(ROOT/'scripts/mute-smoke.py'))['exercise'](app, pump, wait, notifications, closed_notifications, dock_updates, defer_notifications, delayed_notifications)
-    runpy.run_path(str(ROOT/'scripts/scroll-smoke.py'))['exercise'](app, pump, wait)
+    def scroll_pointer(widget, number=1):
+        ok, bounds = widget.compute_bounds(app.window); assert ok
+        px = int(bounds.get_x()+bounds.get_width()/2)
+        py = int(bounds.get_y()+bounds.get_height()/2)
+        xt.XTestFakeMotionEvent(display,-1,px,py,0); x.XFlush(display); pump(.05)
+        xt.XTestFakeButtonEvent(display,number,1,0); xt.XTestFakeButtonEvent(display,number,0,0); x.XFlush(display)
+    runpy.run_path(str(ROOT/'scripts/scroll-smoke.py'))['exercise'](app, pump, wait, scroll_pointer)
     # Large sidebar: only visible rows load; missing photos retain initials and are cached.
     wait(lambda:app.avatar_request is None,'avatar request did not finish')
     original_request=app.bridge.request
