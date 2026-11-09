@@ -4,6 +4,26 @@ Verified on **7 November 2026**, Linux, Node.js **22.22.2**, with the repository
 locked dependencies. No personal WhatsApp account was linked during development.
 
 
+## Latest-message navigation — 9 November 2026 (0.2.15)
+
+Conversations open at the latest message after GTK layout, including delayed
+media sizing. Scrolling up preserves the reader's position through layout and
+message refreshes. The transparent bottom-right shortcut jumps straight to the
+latest page, including from Older history pages, and hides at the latest message.
+
+The full isolated GTK/X11 regression passed with a synthetic 125-message history:
+60-message page bounds, initial bottom position, late media allocation, deliberate
+scrolling, refresh while reading, unchanged-response follow requests, older-page
+shortcut navigation and stale replies after switching chats. All 41 core tests
+passed. No live account, Wayland-specific scrolling or RSS reduction is claimed.
+
+The first 0.2.14 regression only asserted the adjustment value, which missed a
+real viewport mismatch reported by the maintainer. A strengthened test checking
+the last bubble's actual bounds reproduced the failure on that implementation.
+Deferring position updates until after allocation fixes that reproduction.
+The regression now also covers physical wheel scrolling and shortcut clicks,
+window resizing, and cancellation/restoration when hiding to the tray.
+
 ## WhatsApp mute settings — 8 November 2026 (0.2.13)
 
 Muted direct chats and groups retain their sidebar unread counts while producing
