@@ -21,6 +21,7 @@ from desktop_services import DesktopServices
 from clipboard_images import ClipboardImages
 from input_method import configure_input_method
 from memory import release_unused
+from message_scroll import MessagePosition
 
 APP_ID = 'ch.aboimpinto.QuietChat'
 EMOJIS = ['👍', '❤️', '😂', '😊', '🙏', '🎉', '🔥', '✅', '👋', '😢']
@@ -219,7 +220,17 @@ class QuietChat(Gtk.Application):
         self.content_stack.add_named(self.qr_box, 'qr')
         self.message_scroll = Gtk.ScrolledWindow(vexpand=True, hexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
         self.message_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); self.message_list.add_css_class('conversation')
-        self.message_scroll.set_child(self.message_list); self.content_stack.add_named(self.message_scroll, 'messages')
+        self.message_scroll.set_child(self.message_list)
+        message_overlay = Gtk.Overlay()
+        message_overlay.set_child(self.message_scroll)
+        self.latest_button = Gtk.Button(icon_name='go-bottom-symbolic', tooltip_text='Jump to latest message',
+                                       halign=Gtk.Align.END, valign=Gtk.Align.END, margin_end=24, margin_bottom=16)
+        self.latest_button.add_css_class('latest-message')
+        self.latest_button.connect('clicked', lambda *_: self.jump_to_latest())
+        self.latest_button.set_visible(False)
+        message_overlay.add_overlay(self.latest_button)
+        self.content_stack.add_named(message_overlay, 'messages')
+        self.message_position = MessagePosition(self.message_scroll.get_vadjustment(), self.update_latest_button)
         right.append(self.content_stack)
         composer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); composer_box.add_css_class('composer')
         self.reply_bar = Gtk.Box(spacing=8); self.reply_bar.add_css_class('reply-preview')
@@ -490,6 +501,8 @@ class QuietChat(Gtk.Application):
         self.bridge.request('avatar', avatar_done, chat=chat['id'])
 
     def release_messages(self):
+        self.message_position.pause()
+        self.latest_button.set_visible(False)
         focus = self.window.get_focus()
         if focus and focus.is_ancestor(self.message_list): self.composer.grab_focus()
         for menu in self.reaction_buttons.values():
@@ -515,6 +528,7 @@ class QuietChat(Gtk.Application):
 
     def refresh_messages(self, follow=False):
         if not self.ready or not self.current or not self.window.get_visible(): return
+        if follow: self.message_position.latest()
         chat, offset, generation = self.current['id'], self.offset, self.generation
         def complete(result, error):
             if generation != self.generation or not self.window.get_visible() or not self.current or chat != self.current['id'] or offset != self.offset: return
@@ -525,8 +539,6 @@ class QuietChat(Gtk.Application):
             fingerprint = json.dumps(result['messages'], ensure_ascii=False)
             if fingerprint == self.message_fingerprint: return
             self.message_fingerprint = fingerprint
-            adj = self.message_scroll.get_vadjustment()
-            old_value = adj.get_value(); at_end = old_value >= adj.get_upper() - adj.get_page_size() - 30
             self.release_messages()
             self.messages = result['messages']
             for message in self.messages: self.build_message(message)
@@ -534,13 +546,23 @@ class QuietChat(Gtk.Application):
             if self.selected not in self.message_boxes: self.selected = self.messages[-1]['id'] if self.messages else None
             self.select_message(self.selected)
             self.update_controls()
-            def scroll():
-                if generation == self.generation:
-                    adj.set_value(max(0, adj.get_upper()-adj.get_page_size()) if follow or at_end else min(old_value, max(0,adj.get_upper()-adj.get_page_size())))
-                return GLib.SOURCE_REMOVE
-            GLib.timeout_add(60, scroll)
+            self.message_position.resume()
             self.pump_assets()
         self.bridge.request('messages', complete, chat=chat, offset=offset)
+
+    def update_latest_button(self):
+        self.latest_button.set_visible(bool(self.current and self.messages and
+                                           (self.offset or not self.message_position.following)))
+
+    def jump_to_latest(self):
+        if not self.current: return
+        if self.offset:
+            self.offset = 0; self.generation += 1; self.message_fingerprint = None
+            self.refresh_messages(follow=True)
+        else:
+            self.message_position.latest()
+        self.update_controls()
+        self.mark_read()
 
     def build_message(self, message):
         wrapper = Gtk.Box(); wrapper.set_hexpand(True)
@@ -614,15 +636,7 @@ class QuietChat(Gtk.Application):
             if generation == self.generation and epoch == self.asset_epoch and picture.get_parent():
                 if result and result.get('path'):
                     try:
-                        adj = self.message_scroll.get_vadjustment()
-                        at_end = adj.get_value() >= adj.get_upper() - adj.get_page_size() - 30
                         picture.set_paintable(Gdk.Texture.new_from_filename(result['path'])); picture.set_visible(True)
-                        if at_end:
-                            def scroll():
-                                if generation == self.generation and epoch == self.asset_epoch:
-                                    adj.set_value(max(0, adj.get_upper()-adj.get_page_size()))
-                                return GLib.SOURCE_REMOVE
-                            GLib.timeout_add(60, scroll)
                     except GLib.Error: pass
                 elif error and not automatic: self.notice(error, True)
             self.pump_assets()
@@ -966,6 +980,7 @@ class QuietChat(Gtk.Application):
     def shutdown(self):
         if self.quitting: return
         self.quitting = True
+        if self.window: self.message_position.pause()
         if self.reclaim_source: GLib.source_remove(self.reclaim_source); self.reclaim_source = None
         if self.avatar_source: GLib.source_remove(self.avatar_source); self.avatar_source = None
         if self.desktop: self.desktop.close()
