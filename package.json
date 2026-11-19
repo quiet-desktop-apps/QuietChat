@@ -1,6 +1,6 @@
 {
   "name": "quietchat",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "private": true,
   "description": "Native GTK4 WhatsApp companion with a lightweight terminal option",
   "type": "module",
@@ -16,7 +16,7 @@
     "check": "tsc --noEmit",
     "benchmark": "npm run build && node --disable-warning=ExperimentalWarning dist/scripts/benchmark.js",
     "probe": "npm run build && node --disable-warning=ExperimentalWarning dist/scripts/probe.js",
-    "test:native": "npm run build && GDK_BACKEND=x11 xvfb-run -a -s '-screen 0 1400x1000x24' dbus-run-session -- /usr/bin/python3 scripts/native-smoke.py"
+    "test:native": "npm run build && GDK_BACKEND=x11 xvfb-run -a -s '-screen 0 1400x1000x24' dbus-run-session -- /usr/bin/python3 scripts/native-smoke.py && GDK_BACKEND=x11 xvfb-run -a -s '-screen 0 1400x1000x24' dbus-run-session -- /usr/bin/python3 scripts/received-media-smoke.py"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc14",

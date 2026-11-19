@@ -12,6 +12,7 @@ import { Store, PAGE_SIZE } from '../src/store.js';
 import { sqliteAuth } from '../src/auth.js';
 import { AppEvents, displayText, singleLine } from '../src/model.js';
 import { inspectAttachment, MediaCache } from '../src/media.js';
+import { mediaExtension } from '../src/received-media.js';
 import { acquireLock, dataDirectory } from '../src/paths.js';
 import { reconnectDelay, WhatsAppTransport } from '../src/transport.js';
 import { TerminalInput, legacyKey } from '../src/terminal-input.js';
@@ -548,6 +549,89 @@ test('saved contact names survive push names; search treats SQL wildcard charact
     assert.equal(store.listChats('_').length, 0);
     assert.equal(store.listContacts('alex').length, 1);
   } finally { store.close(); }
+});
+
+test('received audio and wrapped documents persist, display metadata, and upgrade old placeholders without new unreads', () => {
+  const store = new Store(':memory:');
+  try {
+    const audio: WAMessage = { ...message('voice'), message: { audioMessage: { ptt: true, seconds: 65, fileLength: 2048, mimetype: 'audio/ogg; codecs=opus' } } };
+    const document: WAMessage = { ...message('pdf'), message: { documentWithCaptionMessage: { message: { documentMessage: { fileName: 'Report.pdf', caption: 'Please read', mimetype: 'application/pdf', fileLength: 4096 } } } } };
+    store.put(audio, true); store.put(document, true);
+    assert.equal(store.message(chat, 'voice')?.kind, 'audio');
+    assert.match(store.message(chat, 'voice')!.text, /Voice message.*1:05.*2 KiB/);
+    assert.equal(store.message(chat, 'pdf')?.kind, 'document');
+    assert.match(store.message(chat, 'pdf')!.text, /Report.pdf.*4 KiB\nPlease read/);
+    assert.ok(store.raw(audio.key)?.message?.audioMessage);
+    assert.ok(normalizeMessageContent(store.raw(document.key)?.message)?.documentMessage);
+    const unread = store.unread();
+    store.db.prepare("UPDATE messages SET kind='unsupported',text='[Unsupported message — open on your phone]',raw=NULL WHERE id='pdf'").run();
+    assert.equal(store.put(document, true), false);
+    assert.equal(store.message(chat,'pdf')?.kind,'document'); assert.equal(store.unread(),unread);
+    store.put({ ...audio, key: {remoteJid:chat,id:'song'}, message: {audioMessage:{seconds:2,ptt:false}} });
+    assert.match(store.message(chat,'song')!.text,/\[Audio/);
+    store.put({ ...message('reply-audio'), message: { extendedTextMessage: {text:'Reply', contextInfo:{quotedMessage:audio.message}} } });
+    assert.equal(store.message(chat,'reply-audio')?.quote,'[Audio]');
+  } finally { store.close(); }
+});
+
+test('private audio and documents never retain bodies or become openable', () => {
+  const store = new Store(':memory:');
+  try {
+    const bodies: WAMessage['message'][] = [
+      {audioMessage:{contextInfo:{expiration:60}}},
+      {documentWithCaptionMessage:{message:{documentMessage:{fileName:'secret.pdf',contextInfo:{expiration:60}}}}},
+      {viewOnceMessageV2:{message:{audioMessage:{ptt:true}}}},
+      {documentWithCaptionMessage:{message:{viewOnceMessageV2:{message:{documentMessage:{fileName:'secret.pdf'}}}}}},
+      {ephemeralMessage:{message:{documentMessage:{fileName:'secret.pdf'}}}},
+    ];
+    bodies.forEach((body,i)=>store.put({...message('private-'+i),message:body}));
+    for (const row of store.messages(chat)) {assert.equal(row.kind,'unsupported'); assert.equal(store.raw({remoteJid:chat,id:row.id}),undefined); assert.ok(!row.text.includes('secret'));}
+  } finally {store.close();}
+});
+
+test('audio/document downloads share cache limits, removal and safe extensions', async () => {
+  const directory = await mkdtemp(join(tmpdir(),'quietchat-received-media-'));
+  try {
+    const cache = new MediaCache(directory,12,10); await cache.init();
+    const audio = cache.path(chat,'voice','audio'), pdf = cache.path(chat,'doc','document','application/pdf','../../run.desktop');
+    assert.match(pdf, /\/[a-f0-9]{64}\.pdf$/);
+    assert.equal(mediaExtension('document','','run.desktop'),'bin');
+    assert.equal(mediaExtension('document','__proto__','run.desktop'),'bin');
+    assert.equal(mediaExtension('document','constructor','run.desktop'),'bin');
+    assert.equal(mediaExtension('document','','Report.DOCX'),'docx');
+    await cache.save(audio,Readable.from([Buffer.from('12345678')]));
+    await cache.save(pdf,Readable.from([Buffer.from('%PDF-1.4')]));
+    assert.equal(await cache.cached(audio),false);
+    assert.equal(await cache.cached(pdf),true);
+    await assert.rejects(cache.save(audio,Readable.from([Buffer.alloc(11)])),/limit/);
+    assert.ok(!(await readdir(directory)).some(name=>name.endsWith('.part')));
+    await cache.remove(chat,'doc'); assert.deepEqual(await readdir(directory),[]);
+    await cache.save(audio,Readable.from([Buffer.from('audio')]));
+    await cache.clear(); assert.deepEqual(await readdir(directory),[]);
+  } finally {await rm(directory,{recursive:true});}
+});
+
+test('transport opens cached audio/documents offline and rejects oversized new attachments before downloading', async () => {
+  const directory = await mkdtemp(join(tmpdir(),'quietchat-media-transport-'));
+  const store = new Store(':memory:'), events = new AppEvents(), ev = new EventEmitter();
+  const cache = new MediaCache(directory, 256, 64); await cache.init();
+  const transport = new WhatsAppTransport(store, events, cache, () => ({ ev, end: () => {} } as unknown as WASocket));
+  try {
+    const voice: WAMessage = {...message('voice'),message:{audioMessage:{mimetype:'audio/ogg',fileLength:100}}};
+    const pdf: WAMessage = {...message('document'),message:{documentWithCaptionMessage:{message:{documentMessage:{fileName:'../paper.pdf',mimetype:'application/pdf',fileLength:100}}}}};
+    store.put(voice); store.put(pdf);
+    const audioPath = cache.path(chat,'voice','audio');
+    const documentPath = cache.path(chat,'document','document','application/pdf');
+    await cache.save(audioPath,Readable.from([Buffer.from('audio')]));
+    await cache.save(documentPath,Readable.from([Buffer.from('%PDF')]));
+    assert.equal(await transport.download(store.message(chat,'voice')!),audioPath);
+    assert.equal(await transport.download(store.message(chat,'document')!),documentPath);
+    await cache.clear(); await transport.start(); ev.emit('connection.update',{connection:'open'});
+    await assert.rejects(transport.download(store.message(chat,'voice')!),/download limit/);
+    await assert.rejects(transport.download(store.message(chat,'document')!),/download limit/);
+    store.remove(pdf.key);
+    await assert.rejects(transport.download({chat,id:'document',kind:'document',sender:'',mine:false,time:0,text:'',reactions:''}),/no longer available/);
+  } finally {transport.stop();store.close();await rm(directory,{recursive:true});}
 });
 
 test('view-once and disappearing bodies are never persisted; unsupported broadcasts are ignored', () => {

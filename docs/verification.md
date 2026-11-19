@@ -4,6 +4,24 @@ Verified on **7 November 2026**, Linux, Node.js **22.22.2**, with the repository
 locked dependencies. No personal WhatsApp account was linked during development.
 
 
+## Received audio and documents — 19 November 2026 (0.2.16)
+
+Core regressions cover voice/audio labels, duration and filename metadata,
+wrapped PDF messages, payload retention, privacy exclusions, legacy-placeholder
+upgrades without duplicate unread counts, safe file extensions, streamed cache
+limits, removal/clear, offline cache access and declared-size rejection in the
+transport. Tests use only synthetic accounts and temporary storage.
+All 45 core tests, the full GTK regression and terminal PTY regression passed.
+The installed-launcher smoke test opened 0.2.16 from this checkout. `ffprobe`
+validated the one-second audio fixture; `pdfinfo` validated the one-page PDF.
+
+`scripts/received-media-smoke.py` runs real GTK and backend IPC with a generated
+one-second WAV and one-page PDF. Isolated `mpv`/`xdg-open` stubs verify that
+receiving attachments does not launch anything, the correct button dispatches
+each file, and viewer failure is reported. This checks dispatch, not live
+WhatsApp downloads or playback through every desktop viewer. Sending remains
+limited to images/videos; old discarded payloads need replay or resend.
+
 ## Latest-message navigation — 9 November 2026 (0.2.15)
 
 Conversations open at the latest message after GTK layout, including delayed

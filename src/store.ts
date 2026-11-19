@@ -1,8 +1,9 @@
 import { muteDeadline } from './mutes.js';
+import { receivedLabel } from './received-media.js';
 import { DatabaseSync } from 'node:sqlite';
 import { proto, normalizeMessageContent, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
 import { isChatJid, type Chat, type Message, type ReplyTarget } from './model.js';
-import { mentionParts, personId, profileName, senderId, quotedPreview, messageContext } from './identities.js';
+import { mentionParts, personId, profileName, senderId, quotedPreview, messageContext, privateMessage } from './identities.js';
 
 type Row = { chat: string; id: string; sender: string; mine: number; time: number; text: string; kind: Message['kind']; reactions: string; quote: string | null };
 export const HISTORY_LIMIT = 10_000;
@@ -16,13 +17,13 @@ export function describeMessage(raw: WAMessage): Omit<Message, 'reactions'> | un
   if (!content || content.protocolMessage || content.reactionMessage || content.senderKeyDistributionMessage && Object.keys(content).length === 1) return;
   const base = { chat, id, sender: raw.pushName || senderId(raw) || (chat.endsWith('@g.us') ? 'Unknown participant' : chat), mine: !!raw.key.fromMe, time: Number(raw.messageTimestamp || Math.floor(Date.now() / 1000)) };
   // Do not retain or expose view-once/disappearing content in this first prototype.
-  const privateMedia = envelope.viewOnceMessage || envelope.viewOnceMessageV2 || envelope.viewOnceMessageV2Extension;
-  const expires = envelope.ephemeralMessage || raw.ephemeralDuration || content.extendedTextMessage?.contextInfo?.expiration || content.imageMessage?.contextInfo?.expiration || content.videoMessage?.contextInfo?.expiration;
-  if (privateMedia || expires) return { ...base, text: '[View this disappearing/view-once message on your phone]', kind: 'unsupported' };
+  if (privateMessage(envelope) || raw.ephemeralDuration) return { ...base, text: '[View this disappearing/view-once message on your phone]', kind: 'unsupported' };
   const quote = quotedPreview(raw);
   const visible = { ...base, quote };
   if (content.imageMessage) return { ...visible, text: content.imageMessage.caption || '[Image]', kind: 'image', raw };
   if (content.videoMessage) return { ...visible, text: content.videoMessage.caption || '[Video]', kind: 'video', raw };
+  if (content.audioMessage) return { ...visible, text: receivedLabel(raw), kind: 'audio', raw };
+  if (content.documentMessage) return { ...visible, text: receivedLabel(raw), kind: 'document', raw };
   const text = content.conversation ?? content.extendedTextMessage?.text;
   if (text != null) return { ...visible, text, kind: 'text', raw };
   return { ...base, text: '[Unsupported message — open on your phone]', kind: 'unsupported' };
@@ -153,6 +154,13 @@ export class Store {
     this.chat(message.chat, undefined, message.time);
     const result = this.db.prepare(`INSERT INTO messages(chat,id,sender,mine,time,text,kind,raw,quote) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(chat,id) DO NOTHING`)
       .run(message.chat, message.id, message.sender, +message.mine, message.time, message.text, message.kind, message.raw ? proto.WebMessageInfo.encode(message.raw).finish() : null, message.raw ? message.quote ?? null : null);
+    // Older versions discarded these payloads. Upgrade only if the server
+    // supplies them again; this is not a new message or an unread increment.
+    if (!result.changes && message.raw && (message.kind === 'audio' || message.kind === 'document')) {
+      this.db.prepare(`UPDATE messages SET text=?,kind=?,raw=?,quote=? WHERE chat=? AND id=?
+        AND kind='unsupported' AND raw IS NULL AND text='[Unsupported message — open on your phone]'`)
+        .run(message.text, message.kind, proto.WebMessageInfo.encode(message.raw).finish(), message.quote ?? null, message.chat, message.id);
+    }
     if (notify && !message.mine && result.changes) this.db.prepare('UPDATE chats SET unread=unread+1 WHERE id=?').run(message.chat);
     return !!result.changes;
   }

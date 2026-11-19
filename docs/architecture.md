@@ -30,7 +30,7 @@ flowchart LR
 | `src/transport.ts` | Baileys connection, QR lifecycle, sends and incoming events |
 | `src/identities.ts` | Participant IDs, safe profile names and protocol-declared mention parts |
 | `src/store.ts`, `src/auth.ts` | SQLite message/contact state, retention and saved authentication |
-| `src/media.ts`, `src/native-assets.ts` | File validation, download, previews and cache limits |
+| `src/media.ts`, `src/received-media.ts`, `src/native-assets.ts` | File validation, received attachment metadata, download, previews and cache limits |
 | `src/ui.ts`, `src/terminal-*.ts` | Terminal widgets, keyboard handling and Unicode-width adaptation |
 
 UI events and backend completions are explicit. Generation/revision checks discard
@@ -68,6 +68,23 @@ can retain freed pages. Hiding the window keeps the connection and notifications
 alive. Fully quitting stops the backend and cleans temporary clipboard images.
 
 ## Privacy and service boundaries
+
+Received audio/voice messages retain duration and attachment metadata; documents
+retain their display filename and caption, including document-with-caption
+envelopes. Payloads download only on explicit open, streamed through the shared
+100 MiB/file and 256 MiB disk-cache limits, one download at a time. Audio uses
+mpv; documents use `xdg-open` and the user's associated external application.
+Neither receives an automatic preview. Local filenames are hashed; document
+extensions come from a bounded list of recognized formats (otherwise `.bin`).
+Remote filenames are display text and never shell commands or filesystem paths.
+External viewer memory is separate from QuietChat's reported UI/backend RSS.
+
+Disappearing and view-once audio/documents remain unsupported and are not
+retained. Earlier versions discarded raw payloads for unsupported messages, so
+existing placeholders cannot be reconstructed locally. If history supplies the
+same audio/document again, its placeholder is upgraded without a second unread
+increment or notification. Otherwise the sender must resend it. Sending new
+audio/documents is outside this receiving-only feature.
 
 Local state is under `$XDG_DATA_HOME/quietchat` or `~/.local/share/quietchat`.
 The SQLite database includes login keys and message data and is not encrypted at
