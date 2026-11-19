@@ -36,6 +36,8 @@ See [memory evidence and measurement scope](docs/memory.md) before comparing fig
 | Text, images/videos, replies, reactions | Yes | Yes |
 | Enter sends; Shift+Enter adds a line | Yes | Yes, terminal support required |
 | Image/video viewing | Small inline previews; mpv on demand | External mpv window on demand |
+| Received audio/voice messages | Play audio in mpv on demand | Enter/F10 opens in mpv |
+| Received documents, including PDFs | Open in the desktop's associated application | Enter/F10 opens in the associated application |
 | Mouse text selection and clipboard images | Native selection; paste image attachment | Terminal selection; file attachments |
 | System tray, unread badge, desktop notifications | Yes, desktop support required | **No built-in desktop notifications or tray** |
 
@@ -48,10 +50,11 @@ terminal interface, but media playback still opens a graphical viewer.
 ## Install from source on Linux
 
 Requires Node.js **22.16+** with npm, system Python **3.11+**, GTK4 **4.8+**,
-PyGObject, GdkPixbuf, mpv and ffmpeg. Ubuntu/Debian system packages:
+PyGObject, GdkPixbuf, mpv, ffmpeg and xdg-utils. Install a PDF/document viewer
+for the document formats you receive. Ubuntu/Debian system packages:
 
 ```bash
-sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-gdkpixbuf-2.0 mpv ffmpeg
+sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-gdkpixbuf-2.0 mpv ffmpeg xdg-utils
 # Install Node.js 22.16+ and npm using your preferred supported method.
 git clone https://github.com/quiet-desktop-apps/QuietChat.git
 cd QuietChat

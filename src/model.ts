@@ -2,9 +2,11 @@ import { EventEmitter } from 'node:events';
 import type { WAMessage } from '@whiskeysockets/baileys';
 
 export type Chat = { id: string; name: string; updated: number; unread: number; preview: string };
+export type MediaKind = 'image' | 'video' | 'audio' | 'document';
+export function isMediaKind(kind: string): kind is MediaKind { return ['image', 'video', 'audio', 'document'].includes(kind); }
 export type Message = {
   chat: string; id: string; sender: string; mine: boolean; time: number;
-  text: string; kind: 'text' | 'image' | 'video' | 'unsupported';
+  text: string; kind: 'text' | MediaKind | 'unsupported';
   raw?: WAMessage; reactions: string; quote?: string;
   senderId?: string; parts?: MessagePart[];
 };

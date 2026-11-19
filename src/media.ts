@@ -6,10 +6,12 @@ import { join, resolve } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import type { Attachment } from './model.js';
+import type { Attachment, MediaKind } from './model.js';
+import { mediaExtension } from './received-media.js';
 
 export const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 export const CACHE_BYTES = 256 * 1024 * 1024;
+const CACHE_FILE = /^[a-f0-9]{64}\.[a-z0-9]{1,8}$/;
 
 export async function inspectAttachment(input: string): Promise<Attachment> {
   const path = resolve(input.startsWith('~/') ? join(homedir(), input.slice(2)) : input);
@@ -30,8 +32,8 @@ export async function inspectAttachment(input: string): Promise<Attachment> {
 
 export class MediaCache {
   constructor(readonly directory: string, readonly budget = CACHE_BYTES, readonly maxFile = MAX_MEDIA_BYTES) {}
-  path(chat: string, id: string, kind: 'image' | 'video'): string {
-    return join(this.directory, createHash('sha256').update(`${chat}\0${id}`).digest('hex') + (kind === 'image' ? '.img' : '.mp4'));
+  path(chat: string, id: string, kind: MediaKind, mime = '', filename = ''): string {
+    return join(this.directory, createHash('sha256').update(`${chat}\0${id}`).digest('hex') + '.' + mediaExtension(kind, mime, filename));
   }
   async init(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -60,7 +62,7 @@ export class MediaCache {
   async prune(keep?: string): Promise<void> {
     const files = [];
     for (const name of await readdir(this.directory)) {
-      if (!/^[a-f0-9]{64}\.(img|mp4)$/.test(name)) continue;
+      if (!CACHE_FILE.test(name)) continue;
       const path = join(this.directory, name), info = await stat(path);
       files.push({ path, size: info.size, time: info.mtimeMs });
     }
@@ -71,11 +73,14 @@ export class MediaCache {
     }
   }
   async remove(chat: string, id: string): Promise<void> {
-    await Promise.all(['image', 'video'].map(kind => unlink(this.path(chat, id, kind as 'image' | 'video')).catch(() => {})));
+    const prefix = createHash('sha256').update(`${chat}\0${id}`).digest('hex') + '.';
+    for (const name of await readdir(this.directory)) {
+      if (name.startsWith(prefix) && CACHE_FILE.test(name)) await unlink(join(this.directory, name)).catch(() => {});
+    }
   }
   async clear(): Promise<void> {
     for (const name of await readdir(this.directory)) {
-      if (/^[a-f0-9]{64}\.(img|mp4)(\.part)?$/.test(name)) await unlink(join(this.directory, name));
+      if (CACHE_FILE.test(name.replace(/\.part$/, ''))) await unlink(join(this.directory, name));
     }
   }
 }
@@ -84,15 +89,17 @@ export class MediaCache {
 export class Viewer {
   private child?: ChildProcess;
   constructor(private readonly onError: (message: string) => void) {}
-  open(path: string, kind: 'image' | 'video'): void {
+  open(path: string, kind: MediaKind): void {
     this.close();
     const args = ['--no-config', '--force-window=yes', '--title=QuietChat', '--really-quiet'];
     if (kind === 'image') args.push('--image-display-duration=inf');
-    const child = spawn('mpv', [...args, '--', path], { stdio: 'ignore', shell: false });
+    const child = kind === 'document'
+      ? spawn('xdg-open', [resolve(path)], { stdio: 'ignore', shell: false })
+      : spawn('mpv', [...args, '--', path], { stdio: 'ignore', shell: false });
     this.child = child;
-    child.on('error', () => this.onError('Cannot start mpv. Install mpv to open images and videos.'));
+    child.on('error', () => this.onError(kind === 'document' ? 'Cannot start the document viewer. Install xdg-utils and an application for this file type.' : 'Cannot start mpv. Install mpv to play audio, images and videos.'));
     child.on('exit', code => {
-      if (this.child === child) { this.child = undefined; if (code && code !== 0) this.onError('mpv could not open this media file.'); }
+      if (this.child === child) { this.child = undefined; if (code && code !== 0) this.onError(kind === 'document' ? 'No application could open this document. Install a viewer for this file type.' : 'mpv could not open this media file.'); }
     });
   }
   close(): void { const previous = this.child; this.child = undefined; previous?.kill(); }

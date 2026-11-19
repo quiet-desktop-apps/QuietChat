@@ -20,11 +20,17 @@ export function profileName(value?: string | null): string | undefined {
 
 export function messageContext(message: WAMessage['message']) {
   const content = normalizeMessageContent(message);
-  return content?.extendedTextMessage?.contextInfo || content?.imageMessage?.contextInfo || content?.videoMessage?.contextInfo;
+  return content?.extendedTextMessage?.contextInfo || content?.imageMessage?.contextInfo || content?.videoMessage?.contextInfo || content?.audioMessage?.contextInfo || content?.documentMessage?.contextInfo;
 }
 
-function privateMessage(message: WAMessage['message']): boolean {
-  return !!(message?.ephemeralMessage || message?.viewOnceMessage || message?.viewOnceMessageV2 || message?.viewOnceMessageV2Extension || messageContext(message)?.expiration);
+export function privateMessage(message: WAMessage['message']): boolean {
+  // Match the SDK's bounded unwrapping, checking privacy before normalization
+  // can strip a view-once/ephemeral envelope nested inside a caption wrapper.
+  for (let depth = 0; message && depth <= 5; depth++) {
+    if (message.ephemeralMessage || message.viewOnceMessage || message.viewOnceMessageV2 || message.viewOnceMessageV2Extension || messageContext(message)?.expiration) return true;
+    message = (message.documentWithCaptionMessage || message.editedMessage || message.associatedChildMessage || message.groupStatusMessage || message.groupStatusMessageV2)?.message;
+  }
+  return false;
 }
 
 export function quotedPreview(raw: WAMessage, name?: (id: string) => string, original?: WAMessage): string | undefined {
@@ -32,13 +38,13 @@ export function quotedPreview(raw: WAMessage, name?: (id: string) => string, ori
   if (!quoted) return;
   if (privateMessage(quoted)) return '[Unavailable message]';
   const body = normalizeMessageContent(quoted);
-  const text = body?.conversation || body?.extendedTextMessage?.text || body?.imageMessage?.caption || body?.videoMessage?.caption || (body?.imageMessage ? '[Image]' : body?.videoMessage ? '[Video]' : '[Message]');
+  const text = body?.conversation || body?.extendedTextMessage?.text || body?.imageMessage?.caption || body?.videoMessage?.caption || body?.documentMessage?.caption || (body?.imageMessage ? '[Image]' : body?.videoMessage ? '[Video]' : body?.audioMessage ? '[Audio]' : body?.documentMessage ? '[Document]' : '[Message]');
   let source: WAMessage = { key: {}, message: quoted };
   // Some replies omit mention metadata. Reuse it only from the matching retained
   // original, never guess from arbitrary @numbers or use a different message body.
   if (!messageContext(quoted)?.mentionedJid?.length && original && !original.ephemeralDuration && !privateMessage(original.message)) {
     const originalBody = normalizeMessageContent(original.message);
-    const originalText = originalBody?.conversation || originalBody?.extendedTextMessage?.text || originalBody?.imageMessage?.caption || originalBody?.videoMessage?.caption;
+    const originalText = originalBody?.conversation || originalBody?.extendedTextMessage?.text || originalBody?.imageMessage?.caption || originalBody?.videoMessage?.caption || originalBody?.documentMessage?.caption;
     if (originalText === text) source = original;
   }
   const parts = name ? mentionParts(text.slice(0, 200), source, name) : undefined;

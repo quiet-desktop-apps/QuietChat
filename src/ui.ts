@@ -2,7 +2,7 @@ import blessed from 'neo-blessed';
 import qrcode from 'qrcode-terminal';
 import { join, basename } from 'node:path';
 import { unlinkSync, writeFileSync } from 'node:fs';
-import { AppEvents, displayText, singleLine, type Attachment, type Chat, type Message, type Transport } from './model.js';
+import { AppEvents, displayText, singleLine, isMediaKind, type Attachment, type Chat, type Message, type Transport } from './model.js';
 import { chooseFile, inspectAttachment, Viewer } from './media.js';
 import { PAGE_SIZE, Store } from './store.js';
 import { TerminalInput } from './terminal-input.js';
@@ -266,9 +266,9 @@ export class TerminalUI {
     if (this.modal || this.qr || this.busy) return;
     if (this.attachment && this.screen.focused === this.composer) { this.viewer.open(this.attachment.path, this.attachment.kind); return; }
     const m = this.messageRows[this.conversation.selected];
-    if (!m || (m.kind !== 'image' && m.kind !== 'video')) { this.notice('Select an image/video message, or focus the composer to preview an attachment.'); return; }
+    if (!m || !isMediaKind(m.kind)) { this.notice('Select an image, video, audio or document, or focus the composer to preview an attachment.'); return; }
     this.busy = true; this.notice('Opening media…');
-    try { const path = await this.transport.download(m); if (!this.destroyed) this.viewer.open(path, m.kind); this.notice('Media opened in mpv. Close the media window when finished.'); }
+    try { const path = await this.transport.download(m); if (!this.destroyed) this.viewer.open(path, m.kind); this.notice(m.kind === 'document' ? 'Opening document in your default application.' : 'Media opened in mpv. Close the media window when finished.'); }
     catch (error) { this.notice((error as Error).message); }
     finally { this.busy = false; }
   }

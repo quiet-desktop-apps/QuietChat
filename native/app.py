@@ -605,6 +605,10 @@ class QuietChat(Gtk.Application):
             if self.settings['thumbnails'] and message.get('thumbnail') and self.image_count < 12:
                 self.image_count += 1
                 self.asset_queue.append((self.asset_epoch, message, picture))
+        if message['kind'] in ('audio','document'):
+            media_actions = Gtk.Box(spacing=8)
+            media_actions.append(button('Play audio' if message['kind'] == 'audio' else 'Open document', lambda m=message: self.open_media(m)))
+            bubble.append(media_actions)
         if message.get('reactions'): bubble.append(label(message['reactions'], 'muted'))
         tools = Gtk.Box(spacing=6)
         tools.append(button('Reply', lambda m=message: self.start_reply(m), 'flat'))
@@ -871,7 +875,7 @@ class QuietChat(Gtk.Application):
     def preview_attachment(self):
         if self.attachment: self.bridge.request('previewAttachment', self.action_done, path=self.attachment['path'])
     def open_media(self, message):
-        if message['kind'] in ('image','video'):
+        if message['kind'] in ('image','video','audio','document'):
             self.notice('Opening media…'); self.bridge.request('media', self.action_done, chat=message['chat'], message=message['id'])
 
     def send_message(self):

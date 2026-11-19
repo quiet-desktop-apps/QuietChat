@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { normalizeMessageContent } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
-import { AppEvents, type Message, type Transport, type ReplyTarget } from './model.js';
+import { AppEvents, isMediaKind, type Message, type Transport, type ReplyTarget } from './model.js';
 import { Store, PAGE_SIZE } from './store.js';
 import { acquireLock, dataDirectory } from './paths.js';
 import { DemoTransport } from './demo.js';
@@ -96,6 +96,10 @@ async function main(): Promise<void> {
     const action = String(command.action), chat = String(command.chat || ''), id = String(command.message || '');
     const reply = command.reply as ReplyTarget | undefined;
     switch (action) {
+      case 'demoAttachments': {
+        if (!(transport instanceof DemoTransport)) throw new Error('Only available in offline demo.');
+        transport.receiveAttachments(chat); return {};
+      }
       case 'chats': return { chats: command.contacts ? store.listContacts(String(command.search || '')) : store.listChats(String(command.search || '')), ...unreadState() };
       case 'messages': {
         const offset = Math.max(0, Math.floor(Number(command.offset) || 0));
@@ -112,7 +116,11 @@ async function main(): Promise<void> {
       }
       case 'react': await transport.react(getMessage(chat,id), String(command.emoji || '').slice(0,32)); return {};
       case 'attachment': return inspectAttachment(String(command.path));
-      case 'media': { const message = getMessage(chat,id); const path = await transport.download(message); viewer.open(path, message.kind === 'video' ? 'video' : 'image'); return {}; }
+      case 'media': {
+        const message = getMessage(chat,id);
+        if (!isMediaKind(message.kind)) throw new Error('Select an image, video, audio or document.');
+        const path = await transport.download(message); viewer.open(path, message.kind); return {};
+      }
       case 'previewAttachment': { const attachment = await inspectAttachment(String(command.path)); viewer.open(attachment.path, attachment.kind); return {}; }
       case 'thumbnail': {
         const message = getMessage(chat,id), content = normalizeMessageContent(store.raw({ remoteJid: chat, id })?.message);

@@ -2,7 +2,8 @@ import makeWASocket, { Browsers, DisconnectReason, downloadMediaMessage, normali
 import pino from 'pino';
 import { fetchMuteSettings } from './mute-sync.js';
 import { sqliteAuth } from './auth.js';
-import { AppEvents, type Attachment, type Message, type ReplyTarget, type Transport } from './model.js';
+import { AppEvents, isMediaKind, type Attachment, type Message, type ReplyTarget, type Transport } from './model.js';
+import { mediaContent } from './received-media.js';
 import { MediaCache } from './media.js';
 import { Store } from './store.js';
 
@@ -218,15 +219,16 @@ export class WhatsAppTransport implements Transport {
     this.store.reactions(raw.key, emoji); this.events.emit('changed');
   }
   async download(message: Message): Promise<string> {
-    if (message.kind !== 'image' && message.kind !== 'video') throw new Error('Select an image or video.');
+    if (!isMediaKind(message.kind)) throw new Error('Select an image, video, audio or document.');
     const raw = this.store.raw({ remoteJid: message.chat, id: message.id });
     if (!raw) throw new Error('The attachment is no longer available.');
-    const path = this.cache.path(message.chat, message.id, message.kind);
+    const media = mediaContent(raw);
+    const document = normalizeMessageContent(raw.message)?.documentMessage;
+    const path = this.cache.path(message.chat, message.id, message.kind, media?.mimetype || '', document?.fileName || '');
     if (await this.cache.cached(path)) return path;
     if (this.downloading) throw new Error('Wait for the current download to finish.');
     const socket = this.connected();
-    const content = normalizeMessageContent(raw.message);
-    const length = Number(content?.imageMessage?.fileLength || content?.videoMessage?.fileLength || 0);
+    const length = Number(media?.fileLength || 0);
     if (length > this.cache.maxFile) throw new Error('This attachment exceeds the 100 MiB download limit.');
     this.downloading = true;
     try {

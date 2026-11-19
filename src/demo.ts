@@ -37,6 +37,16 @@ export class DemoTransport implements Transport {
     this.events.emit('changed');
   }
   stop(): void {}
+  receiveAttachments(chat: string): void {
+    const time = Math.floor(Date.now() / 1000);
+    this.store.put({ key: { remoteJid: chat, id: 'audio' }, pushName: 'Alex', messageTimestamp: time,
+      message: { audioMessage: { ptt: true, seconds: 1, mimetype: 'audio/wav', fileLength: 32044 } } });
+    this.store.put({ key: { remoteJid: chat, id: 'document' }, pushName: 'Alex', messageTimestamp: time+1,
+      message: { documentWithCaptionMessage: { message: { documentMessage: { fileName: 'Meeting notes.pdf', mimetype: 'application/pdf', caption: 'Offline document example' } } } } });
+    this.media.set('audio', fileURLToPath(new URL('../../test/fixtures/demo.wav', import.meta.url)));
+    this.media.set('document', fileURLToPath(new URL('../../test/fixtures/demo.pdf', import.meta.url)));
+    this.events.emit('changed');
+  }
   async sendText(chat: string, text: string, reply?: ReplyTarget): Promise<void> {
     this.store.put(generateWAMessageFromContent(chat, { extendedTextMessage: { text } }, { userJid: '447700900099@s.whatsapp.net', messageId: randomUUID(), quoted: this.store.quote(chat, reply) }));
     this.events.emit('changed');
