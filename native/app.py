@@ -70,6 +70,15 @@ def button(text, callback, css=None):
     return widget
 
 
+def message_action(icon, title, callback=None):
+    widget = Gtk.Button(icon_name=icon) if callback else Gtk.MenuButton(icon_name=icon)
+    widget.add_css_class('message-action')
+    widget.set_tooltip_text(title)
+    widget.update_property([Gtk.AccessibleProperty.LABEL], [title])
+    if callback: widget.connect('clicked', lambda _button: callback())
+    return widget
+
+
 def margins(widget, value):
     for side in ('top', 'bottom', 'start', 'end'): getattr(widget, 'set_margin_' + side)(value)
 
@@ -611,9 +620,9 @@ class QuietChat(Gtk.Application):
             bubble.append(media_actions)
         if message.get('reactions'): bubble.append(label(message['reactions'], 'muted'))
         tools = Gtk.Box(spacing=6)
-        tools.append(button('Reply', lambda m=message: self.start_reply(m), 'flat'))
-        tools.append(button('Copy', lambda m=message: self.copy_text(m['text']), 'flat'))
-        react = Gtk.MenuButton(label='React'); react.add_css_class('flat')
+        tools.append(message_action('mail-reply-sender-symbolic', 'Reply', lambda m=message: self.start_reply(m)))
+        tools.append(message_action('edit-copy-symbolic', 'Copy', lambda m=message: self.copy_text(m['text'])))
+        react = message_action('face-smile-symbolic', 'React')
         react.set_create_popup_func(lambda menu, *_args, m=message: menu.set_popover(self.emoji_popover(True, m)))
         tools.append(react)
         self.reaction_buttons[message['id']] = react
