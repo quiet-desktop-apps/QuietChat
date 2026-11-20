@@ -185,6 +185,13 @@ image.savev('/tmp/quietchat-native.png','png',[],[])
     app.select_message('native-link'); app.composer.grab_focus(); pump(.1); press(0xffc3)  # F6 opens lazy reaction picker.
     popover=app.reaction_buttons['native-link'].get_popover()
     assert popover and popover.get_visible(), f'Reaction picker did not open: {popover}'
+    react_button.popdown(); pump(.1)
+    ok, bounds=react_button.compute_bounds(app.window); assert ok
+    px=int(bounds.get_x()+bounds.get_width()/2); py=int(bounds.get_y()+bounds.get_height()/2)
+    xt.XTestFakeMotionEvent(display,-1,px,py,0); x.XFlush(display); pump(.05)
+    xt.XTestFakeButtonEvent(display,1,1,0); xt.XTestFakeButtonEvent(display,1,0,0); x.XFlush(display); pump(.15)
+    popover=react_button.get_popover()  # The lazy factory may replace it on each open.
+    assert popover and popover.get_visible(), 'Clicking the reaction icon did not open the emoji popup'
     next(w for w in widgets(popover) if isinstance(w,Gtk.Button) and w.get_label()=='👍').emit('clicked')
     wait(lambda:any(m['id']=='native-link' and '👍' in m.get('reactions','') for m in app.messages),'reaction failed')
     # Participant names and mentions use actual pointer activation, preserve drafts,
