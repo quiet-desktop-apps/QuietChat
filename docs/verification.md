@@ -4,15 +4,15 @@ Verified on **7 November 2026**, Linux, Node.js **22.22.2**, with the repository
 locked dependencies. No personal WhatsApp account was linked during development.
 
 
-## Message action icons — 20 November 2026 (0.2.17)
+## Message action icons — 20 November 2026 (0.2.18)
 
-Native message bubbles use symbolic reply, copy and smiley icons instead of text
-buttons. Each has a tooltip and accessible label. The smiley opens the existing
+Native message bubbles use 12-pixel neutral gray reply, copy and smiley icons
+instead of text buttons. Hit areas remain 32 pixels; hover/focus use a lighter gray. Each has a tooltip and accessible label. The smiley opens the existing
 lazy reaction popup; F6 and reply/copy behavior are preserved. Visual verification
 uses synthetic conversations. The existing GTK reaction regression now also
 clicks the icon with a physical pointer before choosing an emoji.
 All 45 core tests, the full isolated GTK suite and the installed-launcher check
-passed. The launcher opened 0.2.17 from the same checkout. No live account was
+passed. The launcher opened 0.2.18 from the same checkout. No live account was
 used for testing and the running user session was left untouched.
 
 ## Received audio and documents — 19 November 2026 (0.2.16)
